@@ -3,7 +3,9 @@
 import asyncio
 import configparser
 import logging
+import os
 import re
+import signal
 from functools import partial
 from pathlib import Path
 
@@ -78,6 +80,7 @@ async def _start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Send me an article URL and I'll convert it to audio for the podcast feed.\n\n"
         "/feed — get the podcast feed URL\n"
+        "/restart — restart the bot\n"
         "/help — more info"
     )
 
@@ -94,6 +97,15 @@ async def _help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Supported: web articles, X/Twitter posts and articles.\n\n"
         "/feed — get the podcast feed URL"
     )
+
+
+async def _restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    allowed = context.bot_data["allowed_users"]
+    if not _is_authorized(update.effective_user.id, allowed):
+        return await _reject_unauthorized(update)
+    logger.info("Restart requested by @%s", update.effective_user.username or update.effective_user.id)
+    await update.message.reply_text("Restarting...")
+    os.kill(os.getpid(), signal.SIGTERM)
 
 
 async def _feed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -233,6 +245,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("start", _start))
     app.add_handler(CommandHandler("help", _help))
     app.add_handler(CommandHandler("feed", _feed))
+    app.add_handler(CommandHandler("restart", _restart))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_url))
 
     logger.info("Bot started (allowed users: %s)", allowed)
