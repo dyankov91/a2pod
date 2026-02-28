@@ -142,6 +142,7 @@ CRITICAL RULES:
 - Return the COMPLETE text with only the above changes applied.
 - Do NOT summarize, shorten, or omit any informational content.
 - Do NOT add commentary, explanations, or preamble.
+- Do NOT start with "Here is" or any introduction. Start directly with the content.
 - Do NOT rewrite sentences beyond the specific changes listed above.
 - Preserve all paragraph breaks and structure.
 - Output ONLY the cleaned text, nothing else.
@@ -173,6 +174,12 @@ def _llm_clean_chunk(text: str, model: str) -> str | None:
             result = data.get("response", "").strip()
             if not result:
                 return None
+            # Strip LLM preamble ("Here is the cleaned text:", etc.)
+            result = re.sub(
+                r"^(here\s*(is|'s)\s*(the\s*)?(cleaned?|edited|updated|revised|modified|final)\s*(version\s*(of\s*)?(the\s*)?)?text\s*[:\-—]\s*\n*)",
+                "", result, count=1, flags=re.IGNORECASE,
+            )
+            result = result.strip()
             # Guard against the LLM drastically shortening content
             if len(result) < len(text) * 0.5:
                 return None
