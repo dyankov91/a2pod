@@ -68,26 +68,28 @@ def main():
     aws_ready = is_aws_configured()
     will_upload = aws_ready and not args.no_upload
     if not will_upload and not args.no_upload:
-        print("⚠️  AWS not configured — saving locally only.")
+        print("  AWS not configured — saving locally only.\n")
 
     # Extract text
+    source_url = None
     if args.file:
         text = extract_from_file(args.file)
         title = args.title or Path(args.file).stem
     else:
-        print(f"📰 Fetching article: {args.url}")
+        source_url = args.url
+        print(f"  Fetching article...", end="", flush=True)
         text, auto_title = extract_from_url(args.url)
         title = args.title or auto_title or "Untitled Article"
+        print(" done")
 
     word_count = len(text.split())
-    print(f'📝 "{title}" — {word_count} words')
-
-    # Chunk text
-    chunks = chunk_text(text)
-    print(f"🔪 Split into {len(chunks)} chunks")
-
     est_minutes = word_count / 150
-    print(f"⏱️  Estimated audio: {est_minutes:.0f} min")
+    chunks = chunk_text(text)
+
+    print()
+    print(f'  "{title}"')
+    print(f"  {word_count} words · {len(chunks)} chunks · ~{est_minutes:.0f} min audio")
+    print()
 
     # Generate audio
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -96,24 +98,28 @@ def main():
         OUTPUT_DIR.mkdir(exist_ok=True)
         filename = sanitize_filename(title)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = args.output or str(OUTPUT_DIR / f"{filename}_{timestamp}.m4b")
+        output_path = args.output or str(OUTPUT_DIR / f"{filename}_{timestamp}.m4a")
 
-        print("🔨 Building audiobook...")
+        print(f"  Encoding M4A...", end="", flush=True)
         concat_to_m4b(wav_files, output_path, title)
 
     size_mb = os.path.getsize(output_path) / (1024 * 1024)
-    print(f"\n✅ Done! {size_mb:.1f} MB saved to: {output_path}")
+    print()
+    print(f"  Saved: {output_path} ({size_mb:.1f} MB)")
 
     # Upload to S3 and update podcast feed
     if will_upload:
         try:
-            upload_audiobook(output_path, title)
+            print(f"  Publishing to podcast feed...", end="", flush=True)
+            upload_audiobook(output_path, title, source_url)
+            print(" done")
             feed_url = get_feed_url()
-            print(f"\n📱 Subscribe in Apple Podcasts:")
-            print(f"   {feed_url}")
+            print()
+            print(f"  Feed: {feed_url}")
         except Exception as e:
-            print(f"\n❌ Upload failed: {e}")
-            print(f"   Audiobook saved locally at: {output_path}")
+            print(f" failed: {e}")
+
+    print()
 
 
 if __name__ == "__main__":

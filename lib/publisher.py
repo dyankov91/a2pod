@@ -6,19 +6,21 @@ import os
 import subprocess
 from email.utils import formatdate
 from pathlib import Path
+from urllib.parse import urlparse
 from xml.etree import ElementTree as ET
 
 CONFIG_PATH = Path.home() / ".config" / "a2pod" / "config"
 FEED_KEY = "feed.xml"
 AUDIOBOOKS_PREFIX = "audiobooks/"
 
-FEED_TITLE = "A2Pod"
+DEFAULT_FEED_TITLE = "A2Pod"
 FEED_DESCRIPTION = "Audiobooks converted from articles"
 ITUNES_NS = "http://www.itunes.com/dtds/podcast-1.0.dtd"
+ARTWORK_KEY = "artwork.jpg"
 
 
 def _load_config() -> dict | None:
-    """Load AWS config from ~/.config/a2pod/config. Returns None if not configured."""
+    """Load config from ~/.config/a2pod/config. Returns None if not configured."""
     if not CONFIG_PATH.exists():
         return None
     cfg = configparser.ConfigParser()
@@ -31,7 +33,13 @@ def _load_config() -> dict | None:
     region = section.get("region", "")
     if not profile or not bucket or not region:
         return None
-    return {"profile": profile, "bucket": bucket, "region": region}
+    podcast = cfg["podcast"] if "podcast" in cfg else {}
+    return {
+        "profile": profile,
+        "bucket": bucket,
+        "region": region,
+        "podcast_name": podcast.get("name", DEFAULT_FEED_TITLE),
+    }
 
 
 def get_feed_url() -> str | None:
@@ -84,11 +92,14 @@ def _build_fresh_feed(config: dict) -> ET.Element:
     ET.register_namespace("itunes", ITUNES_NS)
     rss = ET.Element("rss", {"version": "2.0"})
     channel = ET.SubElement(rss, "channel")
-    ET.SubElement(channel, "title").text = FEED_TITLE
+    podcast_name = config.get("podcast_name", DEFAULT_FEED_TITLE)
+    base = _base_url(config)
+    ET.SubElement(channel, "title").text = podcast_name
     ET.SubElement(channel, "description").text = FEED_DESCRIPTION
-    ET.SubElement(channel, "link").text = f"{_base_url(config)}/{FEED_KEY}"
+    ET.SubElement(channel, "link").text = f"{base}/{FEED_KEY}"
     ET.SubElement(channel, "language").text = "en"
-    ET.SubElement(channel, "{%s}author" % ITUNES_NS).text = "A2Pod"
+    ET.SubElement(channel, "{%s}author" % ITUNES_NS).text = podcast_name
+    ET.SubElement(channel, "{%s}image" % ITUNES_NS, {"href": f"{base}/{ARTWORK_KEY}"})
     ET.SubElement(channel, "{%s}category" % ITUNES_NS, {"text": "Technology"})
     return rss
 
@@ -98,9 +109,14 @@ def _fetch_existing_feed(s3, config: dict) -> ET.Element | None:
     import botocore.exceptions
     try:
         response = s3.get_object(Bucket=config["bucket"], Key=FEED_KEY)
-        xml_bytes = response["Body"].read()
+        raw = response["Body"].read().decode("utf-8")
         ET.register_namespace("itunes", ITUNES_NS)
-        return ET.fromstring(xml_bytes.decode("utf-8"))
+        # Deduplicate xmlns:itunes if present (older feeds had this bug)
+        ns_decl = f' xmlns:itunes="{ITUNES_NS}"'
+        while raw.count(ns_decl) > 1:
+            idx = raw.rindex(ns_decl)
+            raw = raw[:idx] + raw[idx + len(ns_decl):]
+        return ET.fromstring(raw)
     except botocore.exceptions.ClientError as e:
         if e.response["Error"]["Code"] in ("NoSuchKey", "404"):
             return None
@@ -109,7 +125,8 @@ def _fetch_existing_feed(s3, config: dict) -> ET.Element | None:
 
 def _add_feed_item(rss: ET.Element, title: str, s3_key: str,
                    file_size: int, base_url: str,
-                   duration_seconds: int | None = None) -> None:
+                   duration_seconds: int | None = None,
+                   source_url: str | None = None) -> None:
     """Prepend a new <item> to the RSS channel (newest first)."""
     channel = rss.find("channel")
     enclosure_url = f"{base_url}/{s3_key}"
@@ -118,10 +135,14 @@ def _add_feed_item(rss: ET.Element, title: str, s3_key: str,
     ET.SubElement(item, "title").text = title
     ET.SubElement(item, "guid", {"isPermaLink": "false"}).text = enclosure_url
     ET.SubElement(item, "pubDate").text = formatdate(usegmt=True)
+    if source_url:
+        domain = urlparse(source_url).netloc.removeprefix("www.")
+        ET.SubElement(item, "{%s}subtitle" % ITUNES_NS).text = domain
+        ET.SubElement(item, "link").text = source_url
     ET.SubElement(item, "enclosure", {
         "url": enclosure_url,
         "length": str(file_size),
-        "type": "audio/x-m4b",
+        "type": "audio/x-m4a",
     })
     if duration_seconds:
         h = duration_seconds // 3600
@@ -137,29 +158,48 @@ def _add_feed_item(rss: ET.Element, title: str, s3_key: str,
         channel.append(item)
 
 
-def upload_audiobook(local_path: str, title: str) -> str:
-    """Upload .m4b to S3 and update the podcast feed. Returns the public URL."""
+def upload_audiobook(local_path: str, title: str, source_url: str | None = None) -> str:
+    """Upload audio to S3 and update the podcast feed. Returns the public URL."""
     s3, config = _get_s3_client()
     base_url = _base_url(config)
     bucket = config["bucket"]
+    podcast_name = config.get("podcast_name", DEFAULT_FEED_TITLE)
     file_size = os.path.getsize(local_path)
     filename = os.path.basename(local_path)
     s3_key = f"{AUDIOBOOKS_PREFIX}{filename}"
 
-    print(f"☁️  Uploading to S3 ({file_size / 1024 / 1024:.1f} MB)...")
-    s3.upload_file(local_path, bucket, s3_key, ExtraArgs={"ContentType": "audio/x-m4b"})
+    s3.upload_file(local_path, bucket, s3_key, ExtraArgs={"ContentType": "audio/x-m4a"})
     audio_url = f"{base_url}/{s3_key}"
 
     # Fetch or create feed, add item, re-upload
     rss = _fetch_existing_feed(s3, config) or _build_fresh_feed(config)
-    duration = _get_duration_seconds(local_path)
-    _add_feed_item(rss, title, s3_key, file_size, base_url, duration)
 
+    # Update channel-level metadata to match current config
+    channel = rss.find("channel")
+    title_el = channel.find("title")
+    if title_el is not None:
+        title_el.text = podcast_name
+    author_el = channel.find("{%s}author" % ITUNES_NS)
+    if author_el is not None:
+        author_el.text = podcast_name
+    # Ensure artwork is present
+    image_el = channel.find("{%s}image" % ITUNES_NS)
+    if image_el is None:
+        ET.SubElement(channel, "{%s}image" % ITUNES_NS, {"href": f"{base_url}/{ARTWORK_KEY}"})
+    else:
+        image_el.set("href", f"{base_url}/{ARTWORK_KEY}")
+
+    duration = _get_duration_seconds(local_path)
+    _add_feed_item(rss, title, s3_key, file_size, base_url, duration, source_url)
+
+    # Strip any existing xmlns:itunes from the root to avoid duplicates
+    # (ElementTree re-adds it via register_namespace)
+    for attr in list(rss.attrib):
+        if attr.startswith("xmlns"):
+            del rss.attrib[attr]
     ET.indent(rss, space="  ")
     feed_xml = '<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(rss, encoding="unicode")
     s3.put_object(Bucket=bucket, Key=FEED_KEY, Body=feed_xml.encode("utf-8"),
                   ContentType="application/rss+xml")
 
-    feed_url = f"{base_url}/{FEED_KEY}"
-    print(f"📡 Feed updated: {feed_url}")
-    return audio_url
+    return f"{base_url}/{FEED_KEY}"

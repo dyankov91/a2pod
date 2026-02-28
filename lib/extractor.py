@@ -39,8 +39,18 @@ def extract_from_url(url: str) -> tuple[str, str]:
         return extract_from_x(url)
 
     import trafilatura
+    import urllib.request
 
     downloaded = trafilatura.fetch_url(url)
+    if not downloaded:
+        # Some sites block trafilatura's User-Agent; retry with a browser-like one
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+            })
+            downloaded = urllib.request.urlopen(req, timeout=15).read().decode()
+        except Exception:
+            pass
     if not downloaded:
         print(f"❌ Could not fetch URL: {url}")
         sys.exit(1)

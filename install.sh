@@ -59,7 +59,7 @@ fi
 # Python packages
 echo "📦 Installing Python packages..."
 pip3 install --upgrade pip --quiet
-pip3 install mlx-audio trafilatura soundfile "misaki[en]" phonemizer espeakng_loader boto3 --quiet
+pip3 install mlx-audio trafilatura soundfile "misaki[en]" phonemizer espeakng_loader boto3 mutagen Pillow --quiet
 
 # Pre-download Kokoro model
 echo "🧠 Downloading Kokoro TTS model (~160MB)..."
@@ -133,8 +133,41 @@ cfg = configparser.ConfigParser()
 cfg.read(os.path.expanduser('~/.config/a2pod/config'))
 print(cfg['aws']['region'])
 ")
+  EXISTING_NAME=$(python3 -c "
+import configparser, os
+cfg = configparser.ConfigParser()
+cfg.read(os.path.expanduser('~/.config/a2pod/config'))
+print(cfg.get('podcast', 'name', fallback=''))
+" 2>/dev/null)
   echo "✅ AWS already configured (profile: $EXISTING_PROFILE, bucket: $EXISTING_BUCKET)"
   echo "   Feed URL: https://$EXISTING_BUCKET.s3.$EXISTING_REGION.amazonaws.com/feed.xml"
+
+  # Ensure podcast name is set
+  if [[ -z "$EXISTING_NAME" ]]; then
+    echo ""
+    read -p "   Podcast name [A2Pod]: " PODCAST_NAME
+    PODCAST_NAME="${PODCAST_NAME:-A2Pod}"
+    python3 -c "
+import configparser, os
+path = os.path.expanduser('~/.config/a2pod/config')
+cfg = configparser.ConfigParser()
+cfg.read(path)
+if not cfg.has_section('podcast'):
+    cfg.add_section('podcast')
+cfg.set('podcast', 'name', '$PODCAST_NAME')
+with open(path, 'w') as f:
+    cfg.write(f)
+"
+    echo "   ✅ Podcast name set to: $PODCAST_NAME"
+
+    # Generate and upload artwork
+    echo "   🎨 Generating podcast artwork..."
+    python3 "$SCRIPT_DIR/lib/artwork.py" "$PODCAST_NAME" "$CONFIG_DIR/artwork.jpg"
+    aws s3 cp "$CONFIG_DIR/artwork.jpg" "s3://$EXISTING_BUCKET/artwork.jpg" \
+      --profile "$EXISTING_PROFILE" --content-type "image/jpeg" --quiet 2>/dev/null || true
+  else
+    echo "   Podcast name: $EXISTING_NAME"
+  fi
 else
   read -p "   Set up AWS for podcast sync? (y/n): " setup_aws
   if [[ "$setup_aws" =~ ^[Yy]$ ]]; then
@@ -254,6 +287,11 @@ with open(cfg_path, 'w') as f:
       --policy "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"PublicRead\",\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::${AWS_BUCKET}/*\"}]}" \
       2>/dev/null || true
 
+    # Podcast name
+    echo ""
+    read -p "   Podcast name [A2Pod]: " PODCAST_NAME
+    PODCAST_NAME="${PODCAST_NAME:-A2Pod}"
+
     # Save config
     mkdir -p "$CONFIG_DIR"
     cat > "$CONFIG_DIR/config" <<CONF
@@ -261,7 +299,16 @@ with open(cfg_path, 'w') as f:
 profile = $AWS_PROFILE
 bucket = $AWS_BUCKET
 region = $AWS_REGION
+
+[podcast]
+name = $PODCAST_NAME
 CONF
+
+    # Generate and upload podcast artwork
+    echo "   🎨 Generating podcast artwork..."
+    python3 "$SCRIPT_DIR/lib/artwork.py" "$PODCAST_NAME" "$CONFIG_DIR/artwork.jpg"
+    aws s3 cp "$CONFIG_DIR/artwork.jpg" "s3://$AWS_BUCKET/artwork.jpg" \
+      --profile "$AWS_PROFILE" --content-type "image/jpeg" --quiet 2>/dev/null || true
 
     FEED_URL="https://$AWS_BUCKET.s3.$AWS_REGION.amazonaws.com/feed.xml"
     echo ""
