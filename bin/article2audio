@@ -24,7 +24,7 @@ from cleaner import clean_for_audio, llm_clean_for_audio
 from summarizer import get_summary, DEFAULT_MODEL
 from chunker import chunk_text
 from tts import generate_audio_chunks, DEFAULT_VOICE, DEFAULT_SPEED
-from assembler import concat_to_m4b
+from assembler import concat_to_m4b, build_transcript_vtt
 from publisher import is_aws_configured, upload_audiobook, get_feed_url
 
 OUTPUT_DIR = Path.home() / "A2Pod"
@@ -124,6 +124,10 @@ def main():
         print(f"  Encoding M4A...", end="", flush=True)
         concat_to_m4b(wav_files, output_path, title)
 
+        # Build VTT transcript from chunks + WAV durations
+        vtt_path = output_path.replace(".m4a", ".vtt")
+        build_transcript_vtt(chunks, wav_files, vtt_path)
+
     size_mb = os.path.getsize(output_path) / (1024 * 1024)
     print()
     print(f"  Saved: {output_path} ({size_mb:.1f} MB)")
@@ -132,7 +136,7 @@ def main():
     if will_upload:
         try:
             print(f"  Publishing to podcast feed...", end="", flush=True)
-            upload_audiobook(output_path, title, source_url, summary)
+            upload_audiobook(output_path, title, source_url, summary, vtt_path)
             print(" done")
             feed_url = get_feed_url()
             print()

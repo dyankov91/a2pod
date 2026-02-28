@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+import wave
 
 
 def concat_to_m4b(wav_files: list[str], output_path: str, title: str) -> None:
@@ -50,3 +51,31 @@ def concat_to_m4b(wav_files: list[str], output_path: str, title: str) -> None:
     print(" done")
 
 
+def build_transcript_vtt(chunks: list[str], wav_files: list[str], output_path: str) -> str:
+    """Build a WebVTT transcript from text chunks and their corresponding WAV files.
+
+    Reads each WAV's duration to produce cumulative timestamps.
+    Returns output_path.
+    """
+    cues = []
+    offset = 0.0
+    for chunk_text, wav_path in zip(chunks, wav_files):
+        with wave.open(wav_path, "rb") as wf:
+            duration = wf.getnframes() / wf.getframerate()
+        start = offset
+        end = offset + duration
+        cues.append((start, end, chunk_text))
+        offset = end
+
+    def _fmt(seconds: float) -> str:
+        h = int(seconds) // 3600
+        m = (int(seconds) % 3600) // 60
+        s = seconds % 60
+        return f"{h:02d}:{m:02d}:{s:06.3f}"
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("WEBVTT\n")
+        for start, end, text in cues:
+            f.write(f"\n{_fmt(start)} --> {_fmt(end)}\n{text}\n")
+
+    return output_path

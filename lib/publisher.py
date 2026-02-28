@@ -16,6 +16,7 @@ AUDIOBOOKS_PREFIX = "audiobooks/"
 DEFAULT_FEED_TITLE = "A2Pod"
 FEED_DESCRIPTION = "Audiobooks converted from articles"
 ITUNES_NS = "http://www.itunes.com/dtds/podcast-1.0.dtd"
+PODCAST_NS = "https://podcastindex.org/namespace/1.0"
 ARTWORK_KEY = "artwork.jpg"
 
 
@@ -90,6 +91,7 @@ def _base_url(config: dict) -> str:
 def _build_fresh_feed(config: dict) -> ET.Element:
     """Create a minimal valid podcast RSS feed."""
     ET.register_namespace("itunes", ITUNES_NS)
+    ET.register_namespace("podcast", PODCAST_NS)
     rss = ET.Element("rss", {"version": "2.0"})
     channel = ET.SubElement(rss, "channel")
     podcast_name = config.get("podcast_name", DEFAULT_FEED_TITLE)
@@ -111,6 +113,7 @@ def _fetch_existing_feed(s3, config: dict) -> ET.Element | None:
         response = s3.get_object(Bucket=config["bucket"], Key=FEED_KEY)
         raw = response["Body"].read().decode("utf-8")
         ET.register_namespace("itunes", ITUNES_NS)
+        ET.register_namespace("podcast", PODCAST_NS)
         # Deduplicate xmlns:itunes if present (older feeds had this bug)
         ns_decl = f' xmlns:itunes="{ITUNES_NS}"'
         while raw.count(ns_decl) > 1:
@@ -127,7 +130,8 @@ def _add_feed_item(rss: ET.Element, title: str, s3_key: str,
                    file_size: int, base_url: str,
                    duration_seconds: int | None = None,
                    source_url: str | None = None,
-                   summary: str | None = None) -> None:
+                   summary: str | None = None,
+                   transcript_url: str | None = None) -> None:
     """Prepend a new <item> to the RSS channel (newest first)."""
     channel = rss.find("channel")
     enclosure_url = f"{base_url}/{s3_key}"
@@ -153,6 +157,11 @@ def _add_feed_item(rss: ET.Element, title: str, s3_key: str,
         m = (duration_seconds % 3600) // 60
         s = duration_seconds % 60
         ET.SubElement(item, "{%s}duration" % ITUNES_NS).text = f"{h:02d}:{m:02d}:{s:02d}"
+    if transcript_url:
+        ET.SubElement(item, "{%s}transcript" % PODCAST_NS, {
+            "url": transcript_url,
+            "type": "text/vtt",
+        })
 
     items = channel.findall("item")
     if items:
@@ -163,7 +172,8 @@ def _add_feed_item(rss: ET.Element, title: str, s3_key: str,
 
 
 def upload_audiobook(local_path: str, title: str, source_url: str | None = None,
-                     summary: str | None = None) -> str:
+                     summary: str | None = None,
+                     transcript_path: str | None = None) -> str:
     """Upload audio to S3 and update the podcast feed. Returns the public URL."""
     s3, config = _get_s3_client()
     base_url = _base_url(config)
@@ -175,6 +185,14 @@ def upload_audiobook(local_path: str, title: str, source_url: str | None = None,
 
     s3.upload_file(local_path, bucket, s3_key, ExtraArgs={"ContentType": "audio/x-m4a"})
     audio_url = f"{base_url}/{s3_key}"
+
+    # Upload VTT transcript if provided
+    transcript_url = None
+    if transcript_path and os.path.exists(transcript_path):
+        vtt_filename = os.path.basename(transcript_path)
+        vtt_key = f"{AUDIOBOOKS_PREFIX}{vtt_filename}"
+        s3.upload_file(transcript_path, bucket, vtt_key, ExtraArgs={"ContentType": "text/vtt"})
+        transcript_url = f"{base_url}/{vtt_key}"
 
     # Fetch or create feed, add item, re-upload
     rss = _fetch_existing_feed(s3, config) or _build_fresh_feed(config)
@@ -195,7 +213,8 @@ def upload_audiobook(local_path: str, title: str, source_url: str | None = None,
         image_el.set("href", f"{base_url}/{ARTWORK_KEY}")
 
     duration = _get_duration_seconds(local_path)
-    _add_feed_item(rss, title, s3_key, file_size, base_url, duration, source_url, summary)
+    _add_feed_item(rss, title, s3_key, file_size, base_url, duration, source_url, summary,
+                   transcript_url)
 
     # Strip any existing xmlns:itunes from the root to avoid duplicates
     # (ElementTree re-adds it via register_namespace)
