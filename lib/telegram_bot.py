@@ -186,18 +186,24 @@ async def _handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
 
         title = result["title"]
-        size_mb = result["size_mb"]
         summary = result.get("summary") or ""
         audio_url = result.get("audio_url")
+        cached = result.get("cached", False)
 
-        lines = [f"*{title}*"]
+        lines = []
+        if cached:
+            lines.append("Already processed:")
+        lines.append(f"*{title}*")
         if summary:
             lines.append(f"\n{summary}")
         if audio_url:
             lines.append(f"\n[Listen]({audio_url})")
 
         await status_msg.edit_text("\n".join(lines), parse_mode="Markdown")
-        logger.info("Job done for @%s: %s (%.1f MB)", username, title, size_mb)
+        if cached:
+            logger.info("Job done for @%s: %s (cached)", username, title)
+        else:
+            logger.info("Job done for @%s: %s (%.1f MB)", username, title, result["size_mb"])
 
     except PipelineError as e:
         logger.error("Pipeline error for @%s on %s: %s", username, url, e)

@@ -13,7 +13,7 @@ from summarizer import get_summary, DEFAULT_MODEL
 from chunker import chunk_text
 from tts import generate_audio_chunks, DEFAULT_VOICE, DEFAULT_SPEED
 from assembler import concat_to_m4b, build_transcript_vtt
-from publisher import is_aws_configured, upload_audiobook, get_feed_url
+from publisher import is_aws_configured, upload_audiobook, get_feed_url, find_existing_episode
 
 OUTPUT_DIR = Path.home() / "A2Pod"
 
@@ -35,6 +35,7 @@ def run_pipeline(
     no_upload: bool = False,
     no_summary: bool = False,
     output: str | None = None,
+    force: bool = False,
     on_progress: Callable[[str], None] | None = None,
 ) -> dict:
     """Run the full article-to-audio pipeline.
@@ -44,6 +45,13 @@ def run_pipeline(
     def progress(msg: str) -> None:
         if on_progress:
             on_progress(msg)
+
+    # Check for existing episode in the podcast feed
+    if not force and not file_path and url:
+        existing = find_existing_episode(url)
+        if existing:
+            progress("Already processed — returning existing episode.")
+            return existing
 
     # Check upload capability early
     aws_ready = is_aws_configured()

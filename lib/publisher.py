@@ -171,6 +171,39 @@ def _add_feed_item(rss: ET.Element, title: str, s3_key: str,
         channel.append(item)
 
 
+def find_existing_episode(url: str) -> dict | None:
+    """Check if a URL was already processed by searching the RSS feed.
+
+    Returns dict with title, audio_url, summary, feed_url, cached=True, or None.
+    """
+    config = _load_config()
+    if not config:
+        return None
+    try:
+        s3, config = _get_s3_client()
+        rss = _fetch_existing_feed(s3, config)
+    except Exception:
+        return None
+    if rss is None:
+        return None
+
+    normalized = url.rstrip("/")
+    channel = rss.find("channel")
+    for item in channel.findall("item"):
+        link = item.findtext("link", "")
+        if link.rstrip("/") == normalized:
+            enclosure = item.find("enclosure")
+            audio_url = enclosure.get("url") if enclosure is not None else None
+            return {
+                "title": item.findtext("title", ""),
+                "audio_url": audio_url,
+                "summary": item.findtext("description", ""),
+                "feed_url": get_feed_url(),
+                "cached": True,
+            }
+    return None
+
+
 def upload_audiobook(local_path: str, title: str, source_url: str | None = None,
                      summary: str | None = None,
                      transcript_path: str | None = None) -> str:
