@@ -3,10 +3,11 @@
 import configparser
 import json
 import re
-import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+from errors import PipelineError
 
 # Patterns that indicate an error page rather than real article content
 _ERROR_PAGE_PATTERNS = re.compile(
@@ -49,13 +50,11 @@ def _get_x_bearer_token() -> str:
     cfg.read(_CONFIG_PATH)
     token = cfg.get("x", "bearer_token", fallback="").strip()
     if not token:
-        print("❌ X API bearer token not configured.")
-        print(f"   Add it to {_CONFIG_PATH}:")
-        print()
-        print("   [x]")
-        print("   bearer_token = YOUR_TOKEN_HERE")
-        print()
-        sys.exit(1)
+        raise PipelineError(
+            f"X API bearer token not configured.\n"
+            f"Add it to {_CONFIG_PATH}:\n\n"
+            f"[x]\nbearer_token = YOUR_TOKEN_HERE"
+        )
     return token
 
 
@@ -63,8 +62,7 @@ def _extract_post_id(url: str) -> str:
     """Extract post ID from an X/Twitter URL (/status/ or /article/)."""
     match = re.search(r"(?:twitter\.com|x\.com)/\w+/(?:status|article)/(\d+)", url)
     if not match:
-        print(f"❌ Could not extract post ID from URL: {url}")
-        sys.exit(1)
+        raise PipelineError(f"Could not extract post ID from URL: {url}")
     return match.group(1)
 
 
@@ -87,52 +85,51 @@ def _x_api_fetch(post_id: str, token: str) -> dict:
     except urllib.error.HTTPError as e:
         body = e.read().decode() if e.fp else ""
         if e.code == 401:
-            print("❌ X API authentication failed (401).")
-            print("   Check your bearer token in the config file.")
+            raise PipelineError("X API authentication failed (401). Check your bearer token.")
         elif e.code == 403:
-            print("❌ X API access forbidden (403).")
-            print("   Your API plan may not include this endpoint.")
+            raise PipelineError("X API access forbidden (403). Your API plan may not include this endpoint.")
         elif e.code == 404:
-            print("❌ Post not found (404). It may have been deleted.")
+            raise PipelineError("Post not found (404). It may have been deleted.")
         elif e.code == 429:
-            print("❌ X API rate limit exceeded (429). Try again later.")
+            raise PipelineError("X API rate limit exceeded (429). Try again later.")
         else:
-            print(f"❌ X API returned HTTP {e.code}: {body[:200]}")
-        sys.exit(1)
+            raise PipelineError(f"X API returned HTTP {e.code}: {body[:200]}")
+    except PipelineError:
+        raise
     except Exception as e:
-        print(f"❌ Could not reach X API: {e}")
-        sys.exit(1)
+        raise PipelineError(f"Could not reach X API: {e}")
 
 
-def _extract_text_from_tweet(tweet: dict) -> tuple[str, bool]:
+def _extract_text_from_tweet(tweet: dict) -> tuple[str, bool, str | None]:
     """Extract the best available text from a tweet object.
 
-    Returns (text, is_article). Tries article body, note_tweet, then text.
+    Returns (text, is_article, article_title). Tries article body, note_tweet, then text.
     """
     # Try article field — check every plausible key for body content
     article = tweet.get("article")
     if article and isinstance(article, dict):
+        article_title = article.get("title")
         for key in ("text", "body", "content", "html_content"):
             val = article.get(key)
             if val and isinstance(val, str) and len(val) > 100:
-                return val, True
+                return val, True, article_title
         # Last resort: find the longest string value in the article object
         longest = ""
         for val in article.values():
             if isinstance(val, str) and len(val) > len(longest):
                 longest = val
         if len(longest) > 100:
-            return longest, True
+            return longest, True, article_title
 
     # Try note_tweet (long posts >280 chars)
     note = tweet.get("note_tweet")
     if note and isinstance(note, dict):
         note_text = note.get("text", "")
         if note_text:
-            return note_text, False
+            return note_text, False, None
 
     # Fall back to standard text field
-    return tweet.get("text", ""), False
+    return tweet.get("text", ""), False, None
 
 
 def _get_x_author_info(data: dict, url: str) -> tuple[str | None, str]:
@@ -159,38 +156,31 @@ def extract_from_x(url: str) -> tuple[str, str]:
 
     if "errors" in data and "data" not in data:
         err = data["errors"][0]
-        print(f"❌ X API error: {err.get('detail', err.get('title', 'Unknown error'))}")
-        sys.exit(1)
+        raise PipelineError(f"X API error: {err.get('detail', err.get('title', 'Unknown error'))}")
 
     tweet = data["data"]
-    text, is_article = _extract_text_from_tweet(tweet)
+    text, is_article, article_title = _extract_text_from_tweet(tweet)
 
-    # For article URLs: if API didn't return article body, dump response for debugging
+    # For article URLs: if API didn't return article body, report error
     if is_article_url and not is_article and len(text.split()) < 100:
-        print()
-        print("❌ X API did not return the article body text.")
-        print("   The API returned these fields for this tweet:")
-        for key, val in tweet.items():
-            if key == "text":
-                print(f"   - text: {val[:80]}...")
-            elif isinstance(val, dict):
-                print(f"   - {key}: {json.dumps(val, indent=2)[:200]}")
-            else:
-                print(f"   - {key}: {val}")
-        print()
-        print("   The 'article' field may require a Pro or Enterprise X API plan.")
-        sys.exit(1)
+        raise PipelineError(
+            "X API did not return the article body text.\n"
+            "The 'article' field may require a Pro or Enterprise X API plan."
+        )
 
     if not text.strip():
-        print("❌ Post has no text content.")
-        sys.exit(1)
+        raise PipelineError("Post has no text content.")
 
-    display_name, username = _get_x_author_info(data, url)
-    content_type = "article" if (is_article or is_article_url) else "post"
-    if display_name:
-        title = f"{display_name} (@{username}) — {content_type}"
+    # Use article title if available
+    if article_title and article_title.strip():
+        title = article_title.strip()
     else:
-        title = f"@{username} — {content_type}"
+        display_name, username = _get_x_author_info(data, url)
+        content_type = "article" if (is_article or is_article_url) else "post"
+        if display_name:
+            title = f"{display_name} (@{username}) — {content_type}"
+        else:
+            title = f"@{username} — {content_type}"
 
     return text, title
 
@@ -207,17 +197,16 @@ def _fetch_html(url: str) -> str:
             })
             resp = urllib.request.urlopen(req, timeout=15)
             if resp.status >= 400:
-                print(f"❌ URL returned HTTP {resp.status}: {url}")
-                sys.exit(1)
+                raise PipelineError(f"URL returned HTTP {resp.status}: {url}")
             downloaded = resp.read().decode()
+        except PipelineError:
+            raise
         except urllib.error.HTTPError as e:
-            print(f"❌ URL returned HTTP {e.code}: {url}")
-            sys.exit(1)
+            raise PipelineError(f"URL returned HTTP {e.code}: {url}")
         except Exception:
             pass
     if not downloaded:
-        print(f"❌ Could not fetch URL: {url}")
-        sys.exit(1)
+        raise PipelineError(f"Could not fetch URL: {url}")
     return downloaded
 
 
@@ -229,15 +218,11 @@ def _extract_from_html(downloaded: str) -> tuple[str, str | None]:
         downloaded, include_comments=False, include_tables=False
     )
     if not text or len(text.strip()) < 100:
-        print("❌ Could not extract meaningful text from this URL.")
-        print("   The page might be JS-heavy or paywalled.")
-        sys.exit(1)
+        raise PipelineError("Could not extract meaningful text from this URL. The page might be JS-heavy or paywalled.")
 
     word_count = len(text.split())
     if word_count < MIN_ARTICLE_WORDS or _is_error_page(text):
-        print("❌ This URL appears to be an error page (404 / removed content).")
-        print("   Check the URL and try again.")
-        sys.exit(1)
+        raise PipelineError("This URL appears to be an error page (404 / removed content). Check the URL and try again.")
 
     metadata = trafilatura.extract_metadata(downloaded)
     title = metadata.title if metadata and metadata.title else None
@@ -247,10 +232,7 @@ def _extract_from_html(downloaded: str) -> tuple[str, str | None]:
 def extract_from_url(url: str) -> tuple[str, str]:
     """Extract article text and title from a URL."""
     if is_x_url(url):
-        label = "X article" if _is_x_article_url(url) else "X post"
-        print(f"  Detected {label} — fetching via API...", end="", flush=True)
         text, title = extract_from_x(url)
-        print(" done")
         return text, title
 
     downloaded = _fetch_html(url)
@@ -274,6 +256,5 @@ def extract_from_file(filepath: str) -> str:
     """Read text from a local file."""
     p = Path(filepath)
     if not p.exists():
-        print(f"❌ File not found: {filepath}")
-        sys.exit(1)
+        raise PipelineError(f"File not found: {filepath}")
     return p.read_text(encoding="utf-8")

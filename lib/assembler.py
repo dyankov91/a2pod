@@ -2,8 +2,9 @@
 
 import os
 import subprocess
-import sys
 import wave
+
+from errors import PipelineError
 
 
 def concat_to_m4b(wav_files: list[str], output_path: str, title: str) -> None:
@@ -12,8 +13,7 @@ def concat_to_m4b(wav_files: list[str], output_path: str, title: str) -> None:
     Uses ffmpeg to concat WAVs and encode as AAC in M4B container.
     """
     if not wav_files:
-        print("❌ No audio chunks to combine.")
-        sys.exit(1)
+        raise PipelineError("No audio chunks to combine.")
 
     tmpdir = os.path.dirname(wav_files[0])
 
@@ -47,8 +47,6 @@ def concat_to_m4b(wav_files: list[str], output_path: str, title: str) -> None:
         ],
         capture_output=True, check=True,
     )
-
-    print(" done")
 
 
 def build_transcript_vtt(chunks: list[str], wav_files: list[str], output_path: str) -> str:

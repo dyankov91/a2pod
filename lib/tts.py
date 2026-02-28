@@ -3,6 +3,7 @@
 import logging
 import os
 import warnings
+from typing import Callable
 
 import numpy as np
 
@@ -13,12 +14,18 @@ LANG_CODE = "a"  # English
 SAMPLE_RATE = 24000
 
 
+def _default_progress(msg: str) -> None:
+    """Default progress callback — prints to stdout."""
+    print(msg, end="", flush=True)
+
+
 def generate_audio_chunks(
     chunks: list[str],
     voice: str = DEFAULT_VOICE,
     speed: float = DEFAULT_SPEED,
     tmpdir: str = "/tmp",
     model_id: str = MODEL,
+    on_progress: Callable[[str], None] | None = None,
 ) -> list[str]:
     """Generate WAV files for each text chunk.
 
@@ -26,20 +33,22 @@ def generate_audio_chunks(
     """
     import soundfile as sf
 
+    progress = on_progress or _default_progress
+
     # Suppress noisy library output
     logging.disable(logging.WARNING)
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
-    print(f"  Loading TTS model...", end="", flush=True)
+    progress("  Loading TTS model...")
     from mlx_audio.tts.utils import load_model
     model = load_model(model_id)
-    print(" done")
+    progress(" done\n")
 
     wav_files = []
     total = len(chunks)
 
     for i, chunk in enumerate(chunks, 1):
-        print(f"  Generating audio [{i}/{total}]...", end="", flush=True)
+        progress(f"  Generating audio [{i}/{total}]...")
 
         audio_segments = []
         with warnings.catch_warnings():
@@ -48,7 +57,7 @@ def generate_audio_chunks(
                 audio_segments.append(np.array(result.audio))
 
         if not audio_segments:
-            print(" skipped (no audio)")
+            progress(" skipped (no audio)\n")
             continue
 
         audio = np.concatenate(audio_segments)
@@ -56,6 +65,6 @@ def generate_audio_chunks(
         wav_path = os.path.join(tmpdir, f"chunk_{i:04d}.wav")
         sf.write(wav_path, audio, SAMPLE_RATE)
         wav_files.append(wav_path)
-        print(f" {duration:.0f}s")
+        progress(f" {duration:.0f}s\n")
 
     return wav_files

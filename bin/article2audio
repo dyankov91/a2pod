@@ -8,33 +8,23 @@ Usage:
 """
 
 import argparse
-import os
-import re
 import sys
-import tempfile
 import textwrap
-from datetime import datetime
 from pathlib import Path
 
 # Add lib to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from extractor import extract_from_url, extract_from_file, is_x_url
-from cleaner import clean_for_audio, llm_clean_for_audio
-from summarizer import get_summary, DEFAULT_MODEL
-from chunker import chunk_text
-from tts import generate_audio_chunks, DEFAULT_VOICE, DEFAULT_SPEED
-from assembler import concat_to_m4b, build_transcript_vtt
-from publisher import is_aws_configured, upload_audiobook, get_feed_url
-
-OUTPUT_DIR = Path.home() / "A2Pod"
+from errors import PipelineError
+from pipeline import run_pipeline
+from tts import DEFAULT_VOICE, DEFAULT_SPEED
+from summarizer import DEFAULT_MODEL
+from publisher import is_aws_configured
 
 
-def sanitize_filename(title: str) -> str:
-    """Create a safe filename from title."""
-    clean = re.sub(r"[^\w\s-]", "", title)
-    clean = re.sub(r"\s+", "_", clean.strip())
-    return clean[:80] or "article"
+def _print_progress(msg: str) -> None:
+    """Print progress messages in the same style as the original CLI."""
+    print(f"  {msg}")
 
 
 def main():
@@ -70,81 +60,25 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    # Check upload capability early
-    aws_ready = is_aws_configured()
-    will_upload = aws_ready and not args.no_upload
-    if not will_upload and not args.no_upload:
+    if not is_aws_configured() and not args.no_upload:
         print("  AWS not configured — saving locally only.\n")
 
-    # Extract text
-    source_url = None
-    if args.file:
-        text = extract_from_file(args.file)
-        title = args.title or Path(args.file).stem
-    else:
-        source_url = args.url
-        if not is_x_url(args.url):
-            print(f"  Fetching article...", end="", flush=True)
-        text, auto_title = extract_from_url(args.url)
-        title = args.title or auto_title or "Untitled Article"
-        if not is_x_url(args.url):
-            print(" done")
-
-    # Clean text for audio (regex pass + LLM final pass)
-    print(f"  Cleaning text for audio...", end="", flush=True)
-    text = clean_for_audio(text)
-    print(" done")
-    print(f"  LLM cleaning pass ({args.model})...", end="", flush=True)
-    text = llm_clean_for_audio(text, args.model)
-    print(" done")
-
-    # Generate episode summary
-    summary = None
-    if not args.no_summary:
-        print(f"  Generating summary ({args.model})...", end="", flush=True)
-        summary = get_summary(text, title, args.model)
-        print(" done")
-
-    word_count = len(text.split())
-    est_minutes = word_count / 150
-    chunks = chunk_text(text)
-
-    print()
-    print(f'  "{title}"')
-    print(f"  {word_count} words · {len(chunks)} chunks · ~{est_minutes:.0f} min audio")
-    print()
-
-    # Generate audio
-    with tempfile.TemporaryDirectory() as tmpdir:
-        wav_files = generate_audio_chunks(chunks, args.voice, args.speed, tmpdir)
-
-        OUTPUT_DIR.mkdir(exist_ok=True)
-        filename = sanitize_filename(title)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = args.output or str(OUTPUT_DIR / f"{filename}_{timestamp}.m4a")
-
-        print(f"  Encoding M4A...", end="", flush=True)
-        concat_to_m4b(wav_files, output_path, title)
-
-        # Build VTT transcript from chunks + WAV durations
-        vtt_path = output_path.replace(".m4a", ".vtt")
-        build_transcript_vtt(chunks, wav_files, vtt_path)
-
-    size_mb = os.path.getsize(output_path) / (1024 * 1024)
-    print()
-    print(f"  Saved: {output_path} ({size_mb:.1f} MB)")
-
-    # Upload to S3 and update podcast feed
-    if will_upload:
-        try:
-            print(f"  Publishing to podcast feed...", end="", flush=True)
-            upload_audiobook(output_path, title, source_url, summary, vtt_path)
-            print(" done")
-            feed_url = get_feed_url()
-            print()
-            print(f"  Feed: {feed_url}")
-        except Exception as e:
-            print(f" failed: {e}")
+    try:
+        result = run_pipeline(
+            url=args.url,
+            file_path=args.file,
+            title=args.title,
+            voice=args.voice,
+            speed=args.speed,
+            model=args.model,
+            no_upload=args.no_upload,
+            no_summary=args.no_summary,
+            output=args.output,
+            on_progress=_print_progress,
+        )
+    except PipelineError as e:
+        print(f"\n  ❌ {e}")
+        sys.exit(1)
 
     print()
 

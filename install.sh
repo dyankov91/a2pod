@@ -37,7 +37,7 @@ fi
 # Python packages
 echo "📦 Installing Python packages..."
 pip3 install --upgrade pip --quiet
-pip3 install mlx-audio trafilatura soundfile "misaki[en]" phonemizer espeakng_loader boto3 mutagen Pillow --quiet
+pip3 install mlx-audio trafilatura soundfile "misaki[en]" phonemizer espeakng_loader boto3 mutagen Pillow python-telegram-bot --quiet
 
 # Pre-download Kokoro model
 echo "🧠 Downloading Kokoro TTS model (~160MB)..."
@@ -50,6 +50,7 @@ print('✅ Model cached')
 # ─── Make scripts executable ─────────────────────────────────────────────────
 
 chmod +x "$SCRIPT_DIR/bin/a2pod"
+chmod +x "$SCRIPT_DIR/bin/a2pod-bot"
 
 # ─── Output directory ───────────────────────────────────────────────────────
 
@@ -388,6 +389,158 @@ CONF
   else
     echo "   Skipped. Audiobooks will be saved locally only."
     echo "   Run install.sh again to set up later."
+  fi
+fi
+
+# ─── Optional: Telegram Bot ──────────────────────────────────────────────────
+
+echo ""
+echo "🤖 Optional: Enable Telegram bot interface?"
+echo "   Lets you send article URLs to a Telegram bot and get audio back."
+echo "   The bot runs as a background service whenever your Mac is on."
+echo ""
+
+EXISTING_TG_TOKEN=""
+if [[ -f "$CONFIG_DIR/config" ]]; then
+  EXISTING_TG_TOKEN=$(python3 -c "
+import configparser, os
+cfg = configparser.ConfigParser()
+cfg.read(os.path.expanduser('~/.config/a2pod/config'))
+print(cfg.get('telegram', 'bot_token', fallback=''))
+" 2>/dev/null)
+fi
+
+PLIST_PATH="$HOME/Library/LaunchAgents/com.a2pod.bot.plist"
+PYTHON_BIN="$(python3 -c 'import sys; print(sys.executable)')"
+PYTHON_DIR="$(dirname "$PYTHON_BIN")"
+BOT_SCRIPT="$SCRIPT_DIR/bin/a2pod-bot"
+BOT_LOG="$CONFIG_DIR/bot.log"
+
+if [[ -n "$EXISTING_TG_TOKEN" ]]; then
+  echo "✅ Telegram bot already configured"
+
+  # Check if launchd service is installed
+  if [[ -f "$PLIST_PATH" ]]; then
+    echo "✅ Bot service installed (com.a2pod.bot)"
+  else
+    read -p "   Install bot as background service? (y/n): " install_svc
+    if [[ "$install_svc" =~ ^[Yy]$ ]]; then
+      cat > "$PLIST_PATH" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.a2pod.bot</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$PYTHON_BIN</string>
+        <string>$BOT_SCRIPT</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$SCRIPT_DIR</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>$PYTHON_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>PYTHONPATH</key>
+        <string>$SCRIPT_DIR/lib</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>$BOT_LOG</string>
+    <key>StandardErrorPath</key>
+    <string>$BOT_LOG</string>
+</dict>
+</plist>
+PLIST
+      launchctl bootout "gui/$(id -u)" "$PLIST_PATH" 2>/dev/null
+      launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH"
+      echo "   ✅ Bot service started"
+      echo "   Logs: $BOT_LOG"
+    fi
+  fi
+else
+  read -p "   Set up Telegram bot? (y/n): " setup_tg
+  if [[ "$setup_tg" =~ ^[Yy]$ ]]; then
+    echo ""
+    echo "   1. Message @BotFather on Telegram and create a new bot"
+    echo "   2. Copy the bot token"
+    echo ""
+    read -s -p "   Bot token: " TG_TOKEN
+    echo ""
+    echo ""
+    echo "   3. Send /start to your bot, then forward a message to @userinfobot"
+    echo "      to find your numeric user ID"
+    echo ""
+    read -p "   Your Telegram user ID(s), comma-separated: " TG_USERS
+
+    mkdir -p "$CONFIG_DIR"
+    python3 -c "
+import configparser, os
+path = os.path.expanduser('~/.config/a2pod/config')
+cfg = configparser.ConfigParser()
+cfg.read(path)
+if not cfg.has_section('telegram'):
+    cfg.add_section('telegram')
+cfg.set('telegram', 'bot_token', '$TG_TOKEN')
+cfg.set('telegram', 'allowed_users', '$TG_USERS')
+with open(path, 'w') as f:
+    cfg.write(f)
+"
+    echo "   ✅ Telegram bot configured"
+
+    # Install as background service
+    echo ""
+    read -p "   Run bot automatically in the background? (y/n): " install_svc
+    if [[ "$install_svc" =~ ^[Yy]$ ]]; then
+      cat > "$PLIST_PATH" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.a2pod.bot</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$PYTHON_BIN</string>
+        <string>$BOT_SCRIPT</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$SCRIPT_DIR</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>$PYTHON_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>PYTHONPATH</key>
+        <string>$SCRIPT_DIR/lib</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>$BOT_LOG</string>
+    <key>StandardErrorPath</key>
+    <string>$BOT_LOG</string>
+</dict>
+</plist>
+PLIST
+      launchctl bootout "gui/$(id -u)" "$PLIST_PATH" 2>/dev/null
+      launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH"
+      echo "   ✅ Bot service started"
+      echo "   Logs: $BOT_LOG"
+    else
+      echo "   Run manually: a2pod-bot"
+    fi
+  else
+    echo "   Skipped. Add later to $CONFIG_DIR/config:"
+    echo "   [telegram]"
+    echo "   bot_token = YOUR_BOT_TOKEN"
+    echo "   allowed_users = YOUR_USER_ID"
   fi
 fi
 

@@ -9,6 +9,7 @@ Convert any article URL into an audiobook on Apple Silicon. Generates audio loca
 - **Episode summaries** — generates 2-3 sentence descriptions via Ollama (optional, graceful fallback)
 - **Apple Silicon TTS** — Kokoro model via MLX, fast and natural-sounding
 - **Podcast feed** — uploads to S3 and updates an RSS feed, subscribe once in Apple Podcasts
+- **Telegram bot** — send a URL to your bot, get audio back in chat with live progress updates
 - **Offline fallback** — works without AWS, just saves M4B files locally
 
 ## Requirements
@@ -28,7 +29,7 @@ cd a2pod
 ./install.sh
 ```
 
-The installer handles: dependencies, model download, PATH setup, and optional AWS configuration.
+The installer handles: dependencies, model download, PATH setup, and optional AWS / Telegram bot configuration.
 
 Then:
 
@@ -80,6 +81,91 @@ bearer_token = YOUR_TOKEN_HERE
 ```
 
 The installer can also set this up for you during `./install.sh`.
+
+## Telegram Bot
+
+Send article URLs to a Telegram bot and receive the audio file directly in chat. The bot shows live progress as each pipeline step runs.
+
+### Setup
+
+The installer can configure this for you during `./install.sh`. To set up manually:
+
+1. Message [@BotFather](https://t.me/BotFather) on Telegram and create a new bot
+2. Get your numeric user ID by messaging [@userinfobot](https://t.me/userinfobot)
+3. Add to `~/.config/a2pod/config`:
+
+```ini
+[telegram]
+bot_token = 7123456789:AAH...
+allowed_users = 123456789,987654321
+```
+
+Multiple user IDs can be comma-separated. Only listed users can interact with the bot.
+
+### Running as a Background Service
+
+The installer offers to set up a launchd service that starts the bot automatically whenever your Mac is on and restarts it if it crashes.
+
+To install the service manually:
+
+```bash
+# Create the launchd plist (adjust paths to match your setup)
+cat > ~/Library/LaunchAgents/com.a2pod.bot.plist <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.a2pod.bot</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$(python3 -c 'import sys; print(sys.executable)')</string>
+        <string>/path/to/a2pod/bin/a2pod-bot</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/path/to/a2pod</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONPATH</key>
+        <string>/path/to/a2pod/lib</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>~/.config/a2pod/bot.log</string>
+    <key>StandardErrorPath</key>
+    <string>~/.config/a2pod/bot.log</string>
+</dict>
+</plist>
+EOF
+
+# Load the service
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.a2pod.bot.plist
+```
+
+### Managing the Service
+
+```bash
+# Check status
+launchctl print gui/$(id -u)/com.a2pod.bot
+
+# Restart
+launchctl kickstart -k gui/$(id -u)/com.a2pod.bot
+
+# Stop
+launchctl bootout gui/$(id -u)/com.a2pod.bot
+
+# View logs
+tail -f ~/.config/a2pod/bot.log
+```
+
+### Running Manually
+
+```bash
+a2pod-bot
+```
 
 ## Episode Summaries
 
@@ -152,17 +238,21 @@ URL → Scrape → Clean → Summarize → Chunk → TTS → M4A → S3 → Podc
 
 ```
 a2pod/
-├── install.sh              # One-time setup (deps, model, AWS)
+├── install.sh              # One-time setup (deps, model, AWS, Telegram)
 ├── bin/
-│   └── a2pod       # Main CLI
+│   ├── a2pod       # Main CLI
+│   └── a2pod-bot   # Telegram bot entry point
 ├── lib/
+│   ├── errors.py           # Shared PipelineError exception
+│   ├── pipeline.py         # Orchestration (used by CLI and bot)
 │   ├── extractor.py        # URL/file text extraction
-│   ├── cleaner.py          # Regex text cleaning for audio
+│   ├── cleaner.py          # Regex + LLM text cleaning for audio
 │   ├── summarizer.py       # Ollama episode summaries
 │   ├── chunker.py          # Text splitting
 │   ├── tts.py              # MLX Audio TTS wrapper
 │   ├── assembler.py        # Audio concat + M4A packaging
-│   └── publisher.py        # S3 upload + podcast RSS feed
+│   ├── publisher.py        # S3 upload + podcast RSS feed
+│   └── telegram_bot.py     # Telegram bot handlers + polling
 └── README.md
 ```
 
