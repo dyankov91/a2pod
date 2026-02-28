@@ -19,7 +19,7 @@ from pathlib import Path
 # Add lib to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from extractor import extract_from_url, extract_from_file
+from extractor import extract_from_url, extract_from_file, is_x_url
 from cleaner import clean_for_audio, llm_clean_for_audio
 from summarizer import get_summary, DEFAULT_MODEL
 from chunker import chunk_text
@@ -83,10 +83,12 @@ def main():
         title = args.title or Path(args.file).stem
     else:
         source_url = args.url
-        print(f"  Fetching article...", end="", flush=True)
+        if not is_x_url(args.url):
+            print(f"  Fetching article...", end="", flush=True)
         text, auto_title = extract_from_url(args.url)
         title = args.title or auto_title or "Untitled Article"
-        print(" done")
+        if not is_x_url(args.url):
+            print(" done")
 
     # Clean text for audio (regex pass + LLM final pass)
     print(f"  Cleaning text for audio...", end="", flush=True)

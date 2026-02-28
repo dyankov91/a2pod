@@ -34,28 +34,6 @@ else
   echo "✅ ffmpeg"
 fi
 
-# Node.js (required for bird)
-if ! command -v node &>/dev/null; then
-  echo "📦 Installing Node.js..."
-  brew install node
-else
-  echo "✅ node"
-fi
-
-# bird (X/Twitter CLI)
-if ! command -v bird &>/dev/null; then
-  echo "📦 Installing bird (X/Twitter CLI)..."
-  npm install -g @steipete/bird@0.8.0 2>/dev/null
-  echo ""
-  echo "   🐦 bird installed. To authenticate:"
-  echo "   1. Log into x.com in Safari or Chrome"
-  echo "   2. Run: bird check"
-  echo "   Bird auto-detects browser cookies. See: https://bird.fast"
-  echo ""
-else
-  echo "✅ bird"
-fi
-
 # Python packages
 echo "📦 Installing Python packages..."
 pip3 install --upgrade pip --quiet
@@ -95,6 +73,53 @@ else
     echo ""
     echo "   To add later, run:"
     echo "   echo 'export PATH=\"$SCRIPT_DIR/bin:\$PATH\"' >> ~/.zshrc && source ~/.zshrc"
+  fi
+fi
+
+# ─── Optional: X API for posts ────────────────────────────────────────────────
+
+echo ""
+echo "🐦 Optional: Enable X (Twitter) post support?"
+echo "   Lets you convert x.com posts and articles to audio."
+echo ""
+
+EXISTING_X_TOKEN=""
+if [[ -f "$CONFIG_DIR/config" ]]; then
+  EXISTING_X_TOKEN=$(python3 -c "
+import configparser, os
+cfg = configparser.ConfigParser()
+cfg.read(os.path.expanduser('~/.config/a2pod/config'))
+print(cfg.get('x', 'bearer_token', fallback=''))
+" 2>/dev/null)
+fi
+
+if [[ -n "$EXISTING_X_TOKEN" ]]; then
+  echo "✅ X API bearer token already configured"
+else
+  read -p "   Add X API bearer token? (y/n): " setup_x
+  if [[ "$setup_x" =~ ^[Yy]$ ]]; then
+    echo ""
+    read -s -p "   Bearer token: " X_TOKEN
+    echo ""
+
+    mkdir -p "$CONFIG_DIR"
+    # Add [x] section to config (preserve existing sections)
+    python3 -c "
+import configparser, os
+path = os.path.expanduser('~/.config/a2pod/config')
+cfg = configparser.ConfigParser()
+cfg.read(path)
+if not cfg.has_section('x'):
+    cfg.add_section('x')
+cfg.set('x', 'bearer_token', '$X_TOKEN')
+with open(path, 'w') as f:
+    cfg.write(f)
+"
+    echo "   ✅ X API token saved to $CONFIG_DIR/config"
+  else
+    echo "   Skipped. Add later to $CONFIG_DIR/config:"
+    echo "   [x]"
+    echo "   bearer_token = YOUR_TOKEN"
   fi
 fi
 

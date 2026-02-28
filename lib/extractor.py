@@ -1,8 +1,11 @@
 """Text extraction from URLs and files."""
 
+import configparser
+import json
 import re
-import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 # Patterns that indicate an error page rather than real article content
@@ -26,42 +29,133 @@ _ERROR_PAGE_PATTERNS = re.compile(
 
 MIN_ARTICLE_WORDS = 50
 
+_CONFIG_PATH = Path.home() / ".config" / "a2pod" / "config"
+_X_API_BASE = "https://api.x.com/2/tweets"
+
 
 def is_x_url(url: str) -> bool:
     """Check if URL is an X/Twitter link."""
     return bool(re.match(r"https?://(www\.)?(twitter\.com|x\.com)/", url))
 
 
-def extract_from_x(url: str) -> tuple[str, str]:
-    """Extract tweet or thread text using bird CLI."""
-    for cmd in ["thread", "read"]:
-        try:
-            result = subprocess.run(
-                ["bird", cmd, url],
-                capture_output=True, text=True, timeout=30,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                text = result.stdout.strip()
-                match = re.search(r"(?:twitter\.com|x\.com)/(\w+)/status", url)
-                title = f"@{match.group(1)} thread" if match else "X Post"
-                return text, title
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            continue
+def _get_x_bearer_token() -> str:
+    """Read X API bearer token from config file."""
+    cfg = configparser.ConfigParser()
+    cfg.read(_CONFIG_PATH)
+    token = cfg.get("x", "bearer_token", fallback="").strip()
+    if not token:
+        print("❌ X API bearer token not configured.")
+        print(f"   Add it to {_CONFIG_PATH}:")
+        print()
+        print("   [x]")
+        print("   bearer_token = YOUR_TOKEN_HERE")
+        print()
+        sys.exit(1)
+    return token
 
-    print("❌ Could not fetch X/Twitter content.")
-    print("   Make sure bird is installed and authenticated: bird check")
-    sys.exit(1)
+
+def _extract_post_id(url: str) -> str:
+    """Extract post ID from an X/Twitter URL."""
+    match = re.search(r"(?:twitter\.com|x\.com)/\w+/status/(\d+)", url)
+    if not match:
+        print(f"❌ Could not extract post ID from URL: {url}")
+        sys.exit(1)
+    return match.group(1)
+
+
+def extract_from_x(url: str) -> tuple[str, str]:
+    """Extract post or article text using the X API v2."""
+    token = _get_x_bearer_token()
+    post_id = _extract_post_id(url)
+
+    params = (
+        f"tweet.fields=note_tweet,article,author_id,created_at,text"
+        f"&expansions=author_id"
+        f"&user.fields=name,username"
+    )
+    api_url = f"{_X_API_BASE}/{post_id}?{params}"
+
+    req = urllib.request.Request(api_url, headers={
+        "Authorization": f"Bearer {token}",
+    })
+
+    try:
+        resp = urllib.request.urlopen(req, timeout=15)
+        data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode() if e.fp else ""
+        if e.code == 401:
+            print("❌ X API authentication failed (401).")
+            print("   Check your bearer token in the config file.")
+        elif e.code == 403:
+            print("❌ X API access forbidden (403).")
+            print("   Your API plan may not include this endpoint.")
+        elif e.code == 404:
+            print("❌ Post not found (404). It may have been deleted.")
+        elif e.code == 429:
+            print("❌ X API rate limit exceeded (429). Try again later.")
+        else:
+            print(f"❌ X API returned HTTP {e.code}: {body[:200]}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Could not reach X API: {e}")
+        sys.exit(1)
+
+    if "errors" in data and "data" not in data:
+        err = data["errors"][0]
+        print(f"❌ X API error: {err.get('detail', err.get('title', 'Unknown error'))}")
+        sys.exit(1)
+
+    tweet = data["data"]
+
+    # Extract text: article > note_tweet (long post) > text (standard)
+    is_article = False
+    article = tweet.get("article")
+    note = tweet.get("note_tweet")
+
+    if article and article.get("text"):
+        text = article["text"]
+        is_article = True
+    elif note and note.get("text"):
+        text = note["text"]
+    else:
+        text = tweet.get("text", "")
+
+    if not text.strip():
+        print("❌ Post has no text content.")
+        sys.exit(1)
+
+    # Build title from author info
+    username = None
+    display_name = None
+    users = data.get("includes", {}).get("users", [])
+    if users:
+        display_name = users[0].get("name")
+        username = users[0].get("username")
+
+    # Fall back to username from URL if API didn't return it
+    if not username:
+        match = re.search(r"(?:twitter\.com|x\.com)/(\w+)/status", url)
+        username = match.group(1) if match else "unknown"
+
+    content_type = "article" if is_article else "post"
+    if display_name:
+        title = f"{display_name} (@{username}) — {content_type}"
+    else:
+        title = f"@{username} — {content_type}"
+
+    return text, title
 
 
 def extract_from_url(url: str) -> tuple[str, str]:
     """Extract article text and title from a URL."""
     if is_x_url(url):
-        print("🐦 Detected X/Twitter URL — using bird CLI")
-        return extract_from_x(url)
+        print("  Detected X post — fetching via API...", end="", flush=True)
+        text, title = extract_from_x(url)
+        print(" done")
+        return text, title
 
     import trafilatura
-    import urllib.request
-    import urllib.error
 
     downloaded = trafilatura.fetch_url(url)
     if not downloaded:

@@ -4,7 +4,7 @@ Convert any article URL into an audiobook on Apple Silicon. Generates audio loca
 
 ## Features
 
-- **Any URL** — articles, blog posts, newsletters, X/Twitter threads
+- **Any URL** — articles, blog posts, newsletters, X/Twitter posts and articles
 - **Text cleaning** — automatically strips URLs, markdown, code blocks, CTAs, and web artifacts before TTS
 - **Episode summaries** — generates 2-3 sentence descriptions via Ollama (optional, graceful fallback)
 - **Apple Silicon TTS** — Kokoro model via MLX, fast and natural-sounding
@@ -15,8 +15,8 @@ Convert any article URL into an audiobook on Apple Silicon. Generates audio loca
 
 - macOS with Apple Silicon (M1/M2/M3/M4)
 - Python 3.10+
-- Node.js (for [bird](https://bird.fast) X/Twitter CLI)
 - ~500MB disk for model + dependencies
+- X API bearer token (optional, for X/Twitter posts)
 - AWS account (optional, for podcast sync)
 - [Ollama](https://ollama.com) (optional, for episode summaries)
 
@@ -66,19 +66,20 @@ a2pod https://example.com/article --model mistral
 
 ### X/Twitter
 
-Works with tweets and threads:
+Works with posts and long-form articles:
 
 ```bash
 a2pod https://x.com/someuser/status/1234567890
 ```
 
-Uses the [bird](https://bird.fast) CLI. After install, verify auth:
+Requires an X API bearer token. Add it to `~/.config/a2pod/config`:
 
-```bash
-bird check
+```ini
+[x]
+bearer_token = YOUR_TOKEN_HERE
 ```
 
-Bird auto-detects cookies from Safari/Chrome/Firefox. If it can't find them, log into X in your browser and run `bird check` again.
+The installer can also set this up for you during `./install.sh`.
 
 ## Episode Summaries
 
@@ -139,7 +140,7 @@ The S3 bucket (`my-podcast-feed`) needs public read access for Apple Podcasts to
 URL → Scrape → Clean → Summarize → Chunk → TTS → M4A → S3 → Podcast Feed
 ```
 
-1. **Scrape** — trafilatura extracts article text; bird handles X/Twitter
+1. **Scrape** — trafilatura extracts article text; X API v2 handles X/Twitter posts
 2. **Clean** — regex strips URLs, markdown, code blocks, CTAs, and web artifacts
 3. **Summarize** — Ollama generates a 2-3 sentence episode description (optional)
 4. **Chunk** — splits into ~2000 char segments at sentence boundaries
