@@ -249,14 +249,183 @@ def upload_audiobook(local_path: str, title: str, source_url: str | None = None,
     _add_feed_item(rss, title, s3_key, file_size, base_url, duration, source_url, summary,
                    transcript_url)
 
-    # Strip any existing xmlns:itunes from the root to avoid duplicates
-    # (ElementTree re-adds it via register_namespace)
+    _upload_feed(s3, config, rss)
+
+    return f"{base_url}/{FEED_KEY}"
+
+
+def _upload_feed(s3, config: dict, rss: ET.Element) -> None:
+    """Serialize and upload the RSS feed to S3."""
     for attr in list(rss.attrib):
         if attr.startswith("xmlns"):
             del rss.attrib[attr]
     ET.indent(rss, space="  ")
     feed_xml = '<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(rss, encoding="unicode")
-    s3.put_object(Bucket=bucket, Key=FEED_KEY, Body=feed_xml.encode("utf-8"),
+    s3.put_object(Bucket=config["bucket"], Key=FEED_KEY, Body=feed_xml.encode("utf-8"),
                   ContentType="application/rss+xml")
 
-    return f"{base_url}/{FEED_KEY}"
+
+def _s3_key_from_url(url: str, base_url: str) -> str | None:
+    """Strip the base URL to get the S3 key, e.g. 'audiobooks/file.m4a'."""
+    if url and url.startswith(base_url + "/"):
+        return url[len(base_url) + 1:]
+    return None
+
+
+def _collect_item_s3_keys(item: ET.Element, base_url: str) -> list[str]:
+    """Extract S3 keys for audio and transcript from a feed <item>."""
+    keys = []
+    enclosure = item.find("enclosure")
+    if enclosure is not None:
+        key = _s3_key_from_url(enclosure.get("url", ""), base_url)
+        if key:
+            keys.append(key)
+    transcript = item.find("{%s}transcript" % PODCAST_NS)
+    if transcript is not None:
+        key = _s3_key_from_url(transcript.get("url", ""), base_url)
+        if key:
+            keys.append(key)
+    return keys
+
+
+def find_episode(query: str) -> dict | None:
+    """Search feed by URL (exact match) or title (case-insensitive substring).
+
+    Returns {"title", "link", "audio_url"} or None.
+    """
+    config = _load_config()
+    if not config:
+        return None
+    try:
+        s3, config = _get_s3_client()
+        rss = _fetch_existing_feed(s3, config)
+    except Exception:
+        return None
+    if rss is None:
+        return None
+
+    channel = rss.find("channel")
+    query_lower = query.lower().strip()
+    normalized_url = query.rstrip("/")
+
+    for item in channel.findall("item"):
+        link = item.findtext("link", "")
+        title = item.findtext("title", "")
+        # Exact URL match
+        if link and link.rstrip("/") == normalized_url:
+            enclosure = item.find("enclosure")
+            return {
+                "title": title,
+                "link": link,
+                "audio_url": enclosure.get("url") if enclosure is not None else None,
+            }
+        # Case-insensitive title substring
+        if title and query_lower in title.lower():
+            enclosure = item.find("enclosure")
+            return {
+                "title": title,
+                "link": link,
+                "audio_url": enclosure.get("url") if enclosure is not None else None,
+            }
+    return None
+
+
+def list_episodes() -> list[dict]:
+    """Return list of {"title", "link"} for all feed items."""
+    config = _load_config()
+    if not config:
+        return []
+    try:
+        s3, config = _get_s3_client()
+        rss = _fetch_existing_feed(s3, config)
+    except Exception:
+        return []
+    if rss is None:
+        return []
+
+    channel = rss.find("channel")
+    episodes = []
+    for item in channel.findall("item"):
+        episodes.append({
+            "title": item.findtext("title", ""),
+            "link": item.findtext("link", ""),
+        })
+    return episodes
+
+
+def delete_episode(query: str) -> dict:
+    """Delete a single episode matching query (URL or title substring).
+
+    Removes from feed XML and deletes S3 files (audio + transcript).
+    Returns {"title", "files_deleted"}. Raises PipelineError if not found.
+    """
+    from errors import PipelineError
+
+    s3, config = _get_s3_client()
+    base_url = _base_url(config)
+    rss = _fetch_existing_feed(s3, config)
+    if rss is None:
+        raise PipelineError("No podcast feed found.")
+
+    channel = rss.find("channel")
+    query_lower = query.lower().strip()
+    normalized_url = query.rstrip("/")
+    matched_item = None
+
+    for item in channel.findall("item"):
+        link = item.findtext("link", "")
+        title = item.findtext("title", "")
+        if (link and link.rstrip("/") == normalized_url) or \
+           (title and query_lower in title.lower()):
+            matched_item = item
+            break
+
+    if matched_item is None:
+        raise PipelineError(f"No episode found matching: {query}")
+
+    title = matched_item.findtext("title", "")
+    s3_keys = _collect_item_s3_keys(matched_item, base_url)
+
+    channel.remove(matched_item)
+    _upload_feed(s3, config, rss)
+
+    for key in s3_keys:
+        try:
+            s3.delete_object(Bucket=config["bucket"], Key=key)
+        except Exception:
+            pass  # best-effort cleanup
+
+    return {"title": title, "files_deleted": len(s3_keys)}
+
+
+def delete_all_episodes() -> dict:
+    """Remove all episodes from feed and delete all objects under audiobooks/.
+
+    Returns {"episodes_deleted", "files_deleted"}.
+    """
+    s3, config = _get_s3_client()
+    rss = _fetch_existing_feed(s3, config)
+    if rss is None:
+        rss = _build_fresh_feed(config)
+
+    channel = rss.find("channel")
+    items = channel.findall("item")
+    episodes_deleted = len(items)
+    for item in items:
+        channel.remove(item)
+    _upload_feed(s3, config, rss)
+
+    # Delete all objects under audiobooks/ prefix
+    files_deleted = 0
+    bucket = config["bucket"]
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=AUDIOBOOKS_PREFIX):
+        objects = page.get("Contents", [])
+        if objects:
+            s3.delete_objects(
+                Bucket=bucket,
+                Delete={"Objects": [{"Key": obj["Key"]} for obj in objects]},
+            )
+            files_deleted += len(objects)
+
+    return {"episodes_deleted": episodes_deleted, "files_deleted": files_deleted}

@@ -19,7 +19,7 @@ from errors import PipelineError
 from pipeline import run_pipeline
 from tts import DEFAULT_VOICE, DEFAULT_SPEED
 from summarizer import DEFAULT_MODEL
-from publisher import is_aws_configured
+from publisher import is_aws_configured, find_episode, delete_episode, delete_all_episodes, list_episodes
 
 
 def _print_progress(msg: str) -> None:
@@ -55,8 +55,41 @@ def main():
                         help="Skip episode summary generation")
     parser.add_argument("--force", action="store_true",
                         help="Reprocess even if already in the podcast feed")
+    parser.add_argument("--delete", metavar="QUERY",
+                        help="Delete episode matching title or URL")
+    parser.add_argument("--delete-all", action="store_true",
+                        help="Delete all episodes from the feed and S3")
 
     args = parser.parse_args()
+
+    if args.delete:
+        episode = find_episode(args.delete)
+        if not episode:
+            print(f"  No episode found matching: {args.delete}")
+            sys.exit(1)
+        print(f"  Deleting \"{episode['title']}\"...")
+        try:
+            result = delete_episode(args.delete)
+            print(f"  Deleted \"{result['title']}\" ({result['files_deleted']} file(s) removed).")
+        except PipelineError as e:
+            print(f"\n  Error: {e}")
+            sys.exit(1)
+        return
+
+    if args.delete_all:
+        episodes = list_episodes()
+        if not episodes:
+            print("  No episodes in the feed.")
+            return
+        print(f"  This will delete {len(episodes)} episode(s) and all files from S3.")
+        confirm = input("  Type 'yes delete everything' to confirm: ").strip()
+        if confirm != "yes delete everything":
+            print("  Cancelled.")
+            return
+        result = delete_all_episodes()
+        print(f"  Deleted {result['episodes_deleted']} episode(s), "
+              f"{result['files_deleted']} file(s) removed from S3.")
+        return
 
     if not args.url and not args.file:
         parser.print_help()

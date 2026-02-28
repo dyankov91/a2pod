@@ -9,12 +9,14 @@ import signal
 from functools import partial
 from pathlib import Path
 
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    Application, CallbackQueryHandler, CommandHandler, MessageHandler, ContextTypes, filters,
+)
 
 from errors import PipelineError
 from pipeline import run_pipeline
-from publisher import get_feed_url
+from publisher import get_feed_url, find_episode, list_episodes, delete_episode, delete_all_episodes
 
 _CONFIG_PATH = Path.home() / ".config" / "a2pod" / "config"
 
@@ -80,6 +82,8 @@ async def _start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Send me an article URL and I'll convert it to audio for the podcast feed.\n\n"
         "/feed — get the podcast feed URL\n"
+        "/delete <title or URL> — remove an episode\n"
+        "/deleteall — remove all episodes\n"
         "/restart — restart the bot\n"
         "/help — more info"
     )
@@ -95,7 +99,9 @@ async def _help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "2. Generate speech with Kokoro TTS\n"
         "3. Publish to the podcast feed\n\n"
         "Supported: web articles, X/Twitter posts and articles.\n\n"
-        "/feed — get the podcast feed URL"
+        "/feed — get the podcast feed URL\n"
+        "/delete <title or URL> — remove an episode\n"
+        "/deleteall — remove all episodes"
     )
 
 
@@ -227,6 +233,94 @@ async def _handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         active_jobs.discard(user_id)
 
 
+async def _delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    allowed = context.bot_data["allowed_users"]
+    if not _is_authorized(update.effective_user.id, allowed):
+        return await _reject_unauthorized(update)
+
+    if not context.args:
+        await update.message.reply_text("Usage: /delete <title or URL>")
+        return
+
+    query = " ".join(context.args)
+    episode = find_episode(query)
+    if not episode:
+        await update.message.reply_text(f"No episode found matching: {query}")
+        return
+
+    context.user_data["pending_delete"] = query
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Yes, delete", callback_data="delete_yes"),
+        InlineKeyboardButton("Cancel", callback_data="delete_no"),
+    ]])
+    await update.message.reply_text(
+        f"Delete \"{episode['title']}\"?",
+        reply_markup=keyboard,
+    )
+
+
+async def _deleteall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    allowed = context.bot_data["allowed_users"]
+    if not _is_authorized(update.effective_user.id, allowed):
+        return await _reject_unauthorized(update)
+
+    episodes = list_episodes()
+    if not episodes:
+        await update.message.reply_text("No episodes in the feed.")
+        return
+
+    count = len(episodes)
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Yes, delete everything", callback_data="deleteall_yes"),
+        InlineKeyboardButton("Cancel", callback_data="deleteall_no"),
+    ]])
+    await update.message.reply_text(
+        f"Delete all {count} episode(s) and their files from S3?",
+        reply_markup=keyboard,
+    )
+
+
+async def _button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    allowed = context.bot_data["allowed_users"]
+    if not _is_authorized(query.from_user.id, allowed):
+        await query.answer("Not authorized.")
+        return
+
+    await query.answer()
+    data = query.data
+
+    if data == "delete_yes":
+        pending = context.user_data.pop("pending_delete", None)
+        if not pending:
+            await query.edit_message_text("Nothing to delete (expired).")
+            return
+        try:
+            result = delete_episode(pending)
+            await query.edit_message_text(
+                f"Deleted \"{result['title']}\" ({result['files_deleted']} file(s) removed)."
+            )
+        except PipelineError as e:
+            await query.edit_message_text(f"Error: {e}")
+
+    elif data == "delete_no":
+        context.user_data.pop("pending_delete", None)
+        await query.edit_message_text("Cancelled.")
+
+    elif data == "deleteall_yes":
+        try:
+            result = delete_all_episodes()
+            await query.edit_message_text(
+                f"Deleted {result['episodes_deleted']} episode(s), "
+                f"{result['files_deleted']} file(s) removed from S3."
+            )
+        except Exception as e:
+            await query.edit_message_text(f"Error: {e}")
+
+    elif data == "deleteall_no":
+        await query.edit_message_text("Cancelled.")
+
+
 def run_bot() -> None:
     """Start the Telegram bot with long-polling."""
     token, allowed = load_telegram_config()
@@ -245,7 +339,10 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("start", _start))
     app.add_handler(CommandHandler("help", _help))
     app.add_handler(CommandHandler("feed", _feed))
+    app.add_handler(CommandHandler("delete", _delete))
+    app.add_handler(CommandHandler("deleteall", _deleteall))
     app.add_handler(CommandHandler("restart", _restart))
+    app.add_handler(CallbackQueryHandler(_button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_url))
 
     logger.info("Bot started (allowed users: %s)", allowed)
