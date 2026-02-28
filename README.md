@@ -15,6 +15,7 @@ Convert any article URL into an audiobook on Apple Silicon. Share from any app â
 
 - macOS with Apple Silicon (M1/M2/M3/M4)
 - Python 3.10+
+- Node.js (for [bird](https://bird.fast) X/Twitter CLI)
 - ~500MB disk for model + dependencies
 
 ## Quick Start
@@ -75,13 +76,15 @@ Works with tweets and threads:
 a2pod https://x.com/someuser/status/1234567890
 ```
 
-Uses the [bird](https://bird.fast) CLI. After install, verify auth:
+Uses the [bird](https://bird.fast) CLI (`npm install -g @steipete/bird@0.8.0`). After install, verify auth:
 
 ```bash
 bird check
 ```
 
-Bird auto-detects cookies from Firefox/Chrome. If it can't find them, log into X in your browser and run `bird check` again.
+Bird auto-detects cookies from Safari/Chrome/Firefox. If it can't find them, log into X in your browser and run `bird check` again.
+
+> **Note:** bird uses X's undocumented API and may break if X changes their endpoints. If bird stops working, [x-cli](https://github.com/Infatoshi/x-cli) is an alternative that uses the official X API v2 (requires a developer account).
 
 ## Share Sheet Setup (one-time)
 

@@ -33,10 +33,18 @@ else
   echo "✅ ffmpeg"
 fi
 
+# Node.js (required for bird)
+if ! command -v node &>/dev/null; then
+  echo "📦 Installing Node.js..."
+  brew install node
+else
+  echo "✅ node"
+fi
+
 # bird (X/Twitter CLI)
 if ! command -v bird &>/dev/null; then
   echo "📦 Installing bird (X/Twitter CLI)..."
-  brew install steipete/tap/bird
+  npm install -g @steipete/bird@0.8.0 2>/dev/null
   echo ""
   echo "   🐦 bird installed. To authenticate:"
   echo "   1. Log into x.com in Safari or Chrome"
