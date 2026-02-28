@@ -133,14 +133,15 @@ else
   echo "   (Share any URL → auto-queue for audio conversion)"
   read -p "   (y/n): " add_shortcut
   if [[ "$add_shortcut" =~ ^[Yy]$ ]]; then
-    UNSIGNED=$(mktemp /tmp/a2a-unsigned.XXXXX)
-    SIGNED=$(mktemp /tmp/a2a-signed.XXXXX.shortcut)
+    UNSIGNED="/tmp/a2a-unsigned-$$.shortcut"
+    SIGNED="/tmp/A2Pod.shortcut"
     plutil -convert binary1 -o "$UNSIGNED" "$SCRIPT_DIR/config/A2Pod.plist"
     shortcuts sign -m anyone -i "$UNSIGNED" -o "$SIGNED" 2>/dev/null
-    open "$SIGNED"
     rm -f "$UNSIGNED"
+    open "$SIGNED"
     echo "   ⏳ Shortcuts app will open — tap 'Add Shortcut' to confirm."
-    echo "   (temp file auto-cleaned on next reboot)"
+    echo "   ⚠️  If you see 'scripting actions are disabled', click 'Open Preferences'"
+    echo "      and enable 'Allow Running Scripts' (one-time macOS security setting)."
   else
     echo ""
     echo "   To create manually:"
