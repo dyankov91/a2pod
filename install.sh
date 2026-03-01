@@ -209,7 +209,7 @@ cfg.read(path)
 if not cfg.has_section('llm'):
     cfg.add_section('llm')
 cfg.set('llm', 'provider', 'openai')
-cfg.set('llm', 'api_key', '$OPENAI_KEY')
+cfg.set('llm', 'openai_api_key', '$OPENAI_KEY')
 cfg.set('llm', 'model', 'gpt-4o-mini')
 with open(path, 'w') as f:
     cfg.write(f)
@@ -234,7 +234,7 @@ cfg.read(path)
 if not cfg.has_section('llm'):
     cfg.add_section('llm')
 cfg.set('llm', 'provider', 'anthropic')
-cfg.set('llm', 'api_key', '$ANTHROPIC_KEY')
+cfg.set('llm', 'anthropic_api_key', '$ANTHROPIC_KEY')
 cfg.set('llm', 'model', 'claude-haiku-4-20250414')
 with open(path, 'w') as f:
     cfg.write(f)

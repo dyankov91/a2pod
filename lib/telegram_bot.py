@@ -15,6 +15,7 @@ from telegram.ext import (
 )
 
 from errors import PipelineError
+from llm import get_provider_info, get_available_providers, set_provider
 from pipeline import run_pipeline
 from publisher import get_feed_url, find_episode, list_episodes, delete_episode, delete_all_episodes
 
@@ -81,6 +82,7 @@ async def _start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return await _reject_unauthorized(update)
     await update.message.reply_text(
         "Send me an article URL and I'll convert it to audio for the podcast feed.\n\n"
+        "/model — show or switch LLM provider\n"
         "/feed — get the podcast feed URL\n"
         "/delete <title or URL> — remove an episode\n"
         "/deleteall — remove all episodes\n"
@@ -99,6 +101,9 @@ async def _help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "2. Generate speech with Kokoro TTS\n"
         "3. Publish to the podcast feed\n\n"
         "Supported: web articles, X/Twitter posts and articles.\n\n"
+        "/model — show/switch LLM provider and model\n"
+        "/model <provider> — switch provider (ollama, openai, anthropic)\n"
+        "/model <provider> <model> — switch provider and model\n"
         "/feed — get the podcast feed URL\n"
         "/delete <title or URL> — remove an episode\n"
         "/deleteall — remove all episodes"
@@ -123,6 +128,42 @@ async def _feed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(feed_url)
     else:
         await update.message.reply_text("Podcast feed not configured. Set up AWS in install.sh first.")
+
+
+async def _model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show or switch the LLM provider and model."""
+    allowed = context.bot_data["allowed_users"]
+    if not _is_authorized(update.effective_user.id, allowed):
+        return await _reject_unauthorized(update)
+
+    args = context.args
+
+    if not args:
+        provider, model = get_provider_info()
+        available = get_available_providers()
+
+        buttons = []
+        for p in sorted(available):
+            label = f"{'* ' if p == provider else ''}{p} ({available[p]})"
+            buttons.append([InlineKeyboardButton(label, callback_data=f"model_{p}")])
+
+        await update.message.reply_text(
+            f"Current LLM: *{provider}* / `{model}`",
+            reply_markup=InlineKeyboardMarkup(buttons),
+            parse_mode="Markdown",
+        )
+        return
+
+    new_provider = args[0].lower()
+    new_model = args[1] if len(args) > 1 else None
+
+    try:
+        provider, model = set_provider(new_provider, new_model)
+        await update.message.reply_text(f"Switched to *{provider}* / `{model}`", parse_mode="Markdown")
+        logger.info("LLM switched to %s / %s by @%s", provider, model,
+                     update.effective_user.username or update.effective_user.id)
+    except ValueError as e:
+        await update.message.reply_text(f"Error: {e}")
 
 
 def _run_pipeline_sync(url: str, loop: asyncio.AbstractEventLoop, chat_id: int,
@@ -320,6 +361,18 @@ async def _button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     elif data == "deleteall_no":
         await query.edit_message_text("Cancelled.")
 
+    elif data.startswith("model_"):
+        new_provider = data.removeprefix("model_")
+        try:
+            provider, model = set_provider(new_provider)
+            await query.edit_message_text(
+                f"Switched to *{provider}* / `{model}`", parse_mode="Markdown"
+            )
+            logger.info("LLM switched to %s / %s by @%s", provider, model,
+                         query.from_user.username or query.from_user.id)
+        except ValueError as e:
+            await query.edit_message_text(f"Error: {e}")
+
 
 def run_bot() -> None:
     """Start the Telegram bot with long-polling."""
@@ -342,6 +395,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("delete", _delete))
     app.add_handler(CommandHandler("deleteall", _deleteall))
     app.add_handler(CommandHandler("restart", _restart))
+    app.add_handler(CommandHandler("model", _model))
     app.add_handler(CallbackQueryHandler(_button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_url))
 

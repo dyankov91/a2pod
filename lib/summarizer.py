@@ -4,7 +4,7 @@ Generates a 2-3 sentence summary via the configured LLM provider.
 Falls back gracefully if the LLM is unavailable — no crash, always returns a string.
 """
 
-from llm import generate, strip_preamble, DEFAULT_MODEL
+from llm import generate, strip_preamble
 
 MAX_INPUT_CHARS = 6000
 
@@ -24,8 +24,11 @@ def _fallback_summary(text: str) -> str:
     return truncated + "..."
 
 
-def summarize(text: str, title: str = "", model: str = DEFAULT_MODEL) -> str | None:
+def summarize(text: str, title: str = "", model: str | None = None) -> str | None:
     """Generate a summary via LLM. Returns None on any failure."""
+    if model is None:
+        from llm import DEFAULT_MODEL
+        model = DEFAULT_MODEL
     truncated = text[:MAX_INPUT_CHARS]
     prompt = (
         f"Write a 2-3 sentence summary of the following text for a podcast episode description. "
@@ -46,7 +49,7 @@ def summarize(text: str, title: str = "", model: str = DEFAULT_MODEL) -> str | N
     return None
 
 
-def get_summary(text: str, title: str = "", model: str = DEFAULT_MODEL) -> str:
+def get_summary(text: str, title: str = "", model: str | None = None) -> str:
     """Generate a summary, falling back to first-sentence extraction on failure."""
     result = summarize(text, title, model)
     if result:

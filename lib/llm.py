@@ -3,6 +3,7 @@
 Supports Ollama (local), OpenAI, and Anthropic as backends.
 Provider is configured via the [llm] section in ~/.config/a2pod/config.
 Falls back to Ollama + llama3.2 if unconfigured (backward compatible).
+Supports runtime switching via set_provider().
 """
 
 import configparser
@@ -11,6 +12,8 @@ import os
 import re
 import urllib.request
 import urllib.error
+
+_CONFIG_PATH = os.path.expanduser("~/.config/a2pod/config")
 
 _DEFAULT_MODELS = {
     "ollama": "llama3.2",
@@ -35,25 +38,102 @@ def strip_preamble(text: str) -> str:
     return _PREAMBLE_RE.sub("", text, count=1).strip()
 
 
-def _load_llm_config() -> tuple[str, str, str]:
-    """Read [llm] from config. Returns (provider, api_key, model)."""
-    config_path = os.path.expanduser("~/.config/a2pod/config")
+def _load_llm_config() -> tuple[str, dict[str, str], str]:
+    """Read [llm] from config. Returns (provider, api_keys, model).
+
+    api_keys maps provider name -> api_key for all configured providers.
+    """
     cfg = configparser.ConfigParser()
-    cfg.read(config_path)
+    cfg.read(_CONFIG_PATH)
 
     provider = cfg.get("llm", "provider", fallback="ollama").strip().lower()
-    api_key = cfg.get("llm", "api_key", fallback="").strip()
     model = cfg.get("llm", "model", fallback="").strip()
+
+    # Build per-provider API key map
+    api_keys = {"ollama": ""}  # ollama never needs a key
+    generic_key = cfg.get("llm", "api_key", fallback="").strip()
+    for p in _DEFAULT_MODELS:
+        specific = cfg.get("llm", f"{p}_api_key", fallback="").strip()
+        if specific:
+            api_keys[p] = specific
+        elif generic_key and p == provider:
+            # Legacy: single api_key applies to the currently configured provider
+            api_keys[p] = generic_key
 
     if not model:
         model = _DEFAULT_MODELS.get(provider, "llama3.2")
 
-    return provider, api_key, model
+    return provider, api_keys, model
 
 
-_provider, _api_key, _default_model = _load_llm_config()
+_provider, _api_keys, _default_model = _load_llm_config()
 DEFAULT_MODEL = _default_model
 
+
+# ── Public query / switch API ────────────────────────────────────────────────
+
+def get_provider_info() -> tuple[str, str]:
+    """Return (current_provider, current_model)."""
+    return _provider, DEFAULT_MODEL
+
+
+def get_available_providers() -> dict[str, str]:
+    """Return {provider: default_model} for providers that have keys configured.
+
+    Ollama is always available (no key needed).
+    """
+    return {p: _DEFAULT_MODELS[p] for p in _DEFAULT_MODELS if _api_keys.get(p, "") or p == "ollama"}
+
+
+def set_provider(provider: str, model: str | None = None) -> tuple[str, str]:
+    """Switch the active LLM provider and optionally the model at runtime.
+
+    Invalidates cached API clients when switching provider.
+    Persists the change to the config file.
+    Returns (provider, model) after the switch.
+    Raises ValueError if provider is unknown or has no API key.
+    """
+    global _provider, DEFAULT_MODEL, _openai_client, _anthropic_client
+
+    provider = provider.strip().lower()
+    if provider not in _BACKENDS:
+        raise ValueError(f"Unknown provider: {provider}. Choose from: {', '.join(_BACKENDS)}")
+
+    if provider != "ollama" and not _api_keys.get(provider):
+        raise ValueError(
+            f"No API key configured for {provider}.\n"
+            f"Add {provider}_api_key to [llm] in ~/.config/a2pod/config"
+        )
+
+    resolved_model = model or _DEFAULT_MODELS.get(provider, "llama3.2")
+
+    # Invalidate cached clients when switching provider
+    if provider != _provider:
+        _openai_client = None
+        _anthropic_client = None
+
+    _provider = provider
+    DEFAULT_MODEL = resolved_model
+
+    _save_llm_config(provider, resolved_model)
+    return provider, resolved_model
+
+
+def _save_llm_config(provider: str, model: str) -> None:
+    """Persist current provider and model to the config file."""
+    cfg = configparser.ConfigParser()
+    cfg.read(_CONFIG_PATH)
+
+    if not cfg.has_section("llm"):
+        cfg.add_section("llm")
+    cfg.set("llm", "provider", provider)
+    cfg.set("llm", "model", model)
+
+    with open(_CONFIG_PATH, "w") as f:
+        cfg.write(f)
+
+
+# ── Backends ─────────────────────────────────────────────────────────────────
 
 def _generate_ollama(prompt: str, temperature: float, max_tokens: int, model: str, api_key: str) -> str | None:
     """Generate via local Ollama server."""
@@ -90,15 +170,15 @@ def _generate_openai(prompt: str, temperature: float, max_tokens: int, model: st
     try:
         import openai
     except ImportError:
-        raise SystemExit(
+        raise RuntimeError(
             "OpenAI provider selected but 'openai' package is not installed.\n"
             "Run: pip3 install openai"
         )
 
     if not api_key:
-        raise SystemExit(
+        raise RuntimeError(
             "OpenAI provider selected but no api_key set in config.\n"
-            "Add api_key to [llm] section in ~/.config/a2pod/config"
+            "Add openai_api_key to [llm] section in ~/.config/a2pod/config"
         )
 
     if _openai_client is None:
@@ -126,15 +206,15 @@ def _generate_anthropic(prompt: str, temperature: float, max_tokens: int, model:
     try:
         import anthropic
     except ImportError:
-        raise SystemExit(
+        raise RuntimeError(
             "Anthropic provider selected but 'anthropic' package is not installed.\n"
             "Run: pip3 install anthropic"
         )
 
     if not api_key:
-        raise SystemExit(
+        raise RuntimeError(
             "Anthropic provider selected but no api_key set in config.\n"
-            "Add api_key to [llm] section in ~/.config/a2pod/config"
+            "Add anthropic_api_key to [llm] section in ~/.config/a2pod/config"
         )
 
     if _anthropic_client is None:
@@ -174,4 +254,4 @@ def generate(
     backend = _BACKENDS.get(_provider)
     if backend is None:
         raise SystemExit(f"Unknown LLM provider: {_provider}")
-    return backend(prompt, temperature, max_tokens, resolved_model, _api_key)
+    return backend(prompt, temperature, max_tokens, resolved_model, _api_keys.get(_provider, ""))

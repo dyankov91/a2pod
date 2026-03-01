@@ -6,7 +6,7 @@ optional LLM pass to catch subtle patterns the regex missed.
 
 import re
 
-from llm import generate, strip_preamble, DEFAULT_MODEL
+from llm import generate, strip_preamble
 
 LLM_CHUNK_SIZE = 4000
 
@@ -218,8 +218,11 @@ def _llm_clean_chunk(text: str, model: str) -> str | None:
     return result
 
 
-def llm_clean_for_audio(text: str, model: str = DEFAULT_MODEL) -> str:
+def llm_clean_for_audio(text: str, model: str | None = None) -> str:
     """LLM final pass to catch what regex missed. Returns input unchanged on failure."""
+    if model is None:
+        from llm import DEFAULT_MODEL
+        model = DEFAULT_MODEL
     paragraphs = text.split("\n\n")
     chunks = []
     current: list[str] = []

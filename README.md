@@ -188,7 +188,7 @@ brew install ollama && ollama pull llama3.2
 ```ini
 [llm]
 provider = openai
-api_key = sk-...
+openai_api_key = sk-...
 model = gpt-4o-mini
 ```
 
@@ -201,12 +201,22 @@ pip3 install openai
 ```ini
 [llm]
 provider = anthropic
-api_key = sk-ant-...
+anthropic_api_key = sk-ant-...
 model = claude-haiku-4-20250414
 ```
 
 ```bash
 pip3 install anthropic
+```
+
+**Multiple providers:** You can store API keys for multiple providers and switch between them at runtime (via the Telegram bot's `/model` command or by editing the config):
+
+```ini
+[llm]
+provider = openai
+model = gpt-4o-mini
+openai_api_key = sk-...
+anthropic_api_key = sk-ant-...
 ```
 
 If no provider is configured, Ollama is used by default. If the LLM is unavailable, summaries fall back to first-sentence extraction and text cleaning uses regex only. Use `--no-summary` to skip summaries entirely, or `--model <name>` to override the model.
