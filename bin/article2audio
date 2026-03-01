@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 from errors import PipelineError
 from pipeline import run_pipeline
-from tts import DEFAULT_VOICE, DEFAULT_SPEED
+from tts import DEFAULT_VOICE, DEFAULT_SPEED, DEFAULT_WORKERS
 from llm import DEFAULT_MODEL
 from publisher import is_aws_configured, find_episode, delete_episode, delete_all_episodes, list_episodes
 
@@ -53,6 +53,8 @@ def main():
                         help=f"LLM model (default: {DEFAULT_MODEL}, based on configured provider)")
     parser.add_argument("--no-summary", action="store_true",
                         help="Skip episode summary generation")
+    parser.add_argument("--workers", "-w", type=int, default=DEFAULT_WORKERS,
+                        help=f"Parallel TTS workers (default: {DEFAULT_WORKERS})")
     parser.add_argument("--force", action="store_true",
                         help="Reprocess even if already in the podcast feed")
     parser.add_argument("--delete", metavar="QUERY",
@@ -110,6 +112,7 @@ def main():
             no_summary=args.no_summary,
             output=args.output,
             force=args.force,
+            workers=args.workers,
             on_progress=_print_progress,
         )
     except PipelineError as e:

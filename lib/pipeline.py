@@ -10,9 +10,8 @@ from typing import Callable
 from extractor import extract_from_url, extract_from_file, is_x_url
 from cleaner import clean_for_audio, llm_clean_for_audio
 from summarizer import get_summary
-from llm import DEFAULT_MODEL
 from chunker import chunk_text
-from tts import generate_audio_chunks, DEFAULT_VOICE, DEFAULT_SPEED
+from tts import generate_audio_chunks, DEFAULT_VOICE, DEFAULT_SPEED, DEFAULT_WORKERS
 from assembler import concat_to_m4b, build_transcript_vtt
 from publisher import is_aws_configured, upload_audiobook, get_feed_url, find_existing_episode
 
@@ -32,17 +31,22 @@ def run_pipeline(
     title: str | None = None,
     voice: str = DEFAULT_VOICE,
     speed: float = DEFAULT_SPEED,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
     no_upload: bool = False,
     no_summary: bool = False,
     output: str | None = None,
     force: bool = False,
+    workers: int = DEFAULT_WORKERS,
     on_progress: Callable[[str], None] | None = None,
 ) -> dict:
     """Run the full article-to-audio pipeline.
 
     Returns dict with output_path, vtt_path, title, size_mb, and optionally feed_url.
     """
+    if model is None:
+        from llm import DEFAULT_MODEL
+        model = DEFAULT_MODEL
+
     def progress(msg: str) -> None:
         if on_progress:
             on_progress(msg)
@@ -95,6 +99,7 @@ def run_pipeline(
         wav_files = generate_audio_chunks(
             chunks, voice, speed, tmpdir,
             on_progress=lambda msg: progress(msg.strip()),
+            workers=workers,
         )
 
         OUTPUT_DIR.mkdir(exist_ok=True)
