@@ -148,8 +148,9 @@ def _add_feed_item(rss: ET.Element, title: str, s3_key: str,
         ET.SubElement(item, "{%s}subtitle" % ITUNES_NS).text = domain
         ET.SubElement(item, "link").text = source_url
     if summary:
-        ET.SubElement(item, "description").text = summary
-        ET.SubElement(item, "{%s}summary" % ITUNES_NS).text = summary
+        episode_desc = f"Narrated by {voice_name}. {summary}" if voice_name else summary
+        ET.SubElement(item, "description").text = episode_desc
+        ET.SubElement(item, "{%s}summary" % ITUNES_NS).text = episode_desc
     ET.SubElement(item, "enclosure", {
         "url": enclosure_url,
         "length": str(file_size),
@@ -164,6 +165,8 @@ def _add_feed_item(rss: ET.Element, title: str, s3_key: str,
         ET.SubElement(item, "{%s}transcript" % PODCAST_NS, {
             "url": transcript_url,
             "type": "text/vtt",
+            "language": "en",
+            "rel": "captions",
         })
 
     items = channel.findall("item")
