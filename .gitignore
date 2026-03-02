@@ -6,3 +6,7 @@ build/
 .venv/
 *.log
 *.lock
+.env
+.env.*
+*.key
+*.pem
