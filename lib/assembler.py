@@ -1,10 +1,14 @@
 """Audio assembly — concatenate WAV chunks into M4B audiobook."""
 
 import os
+import re
 import subprocess
 import wave
 
 from errors import PipelineError
+
+MAX_CUE_CHARS = 200
+MIN_CUE_DURATION = 0.3
 
 
 def concat_to_m4b(wav_files: list[str], output_path: str, title: str) -> None:
@@ -49,6 +53,31 @@ def concat_to_m4b(wav_files: list[str], output_path: str, title: str) -> None:
     )
 
 
+def _split_into_segments(text: str) -> list[str]:
+    """Split text into sentence-level segments for VTT cues.
+
+    Two-level split: sentences first, then clauses for long sentences.
+    """
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    segments = []
+    for sentence in sentences:
+        if len(sentence) <= MAX_CUE_CHARS:
+            segments.append(sentence)
+        else:
+            # Split long sentences at clause boundaries
+            parts = re.split(r"(?<=[,;])\s+|(?<=—)\s*|\s+(?=—)", sentence)
+            current = ""
+            for part in parts:
+                if current and len(current) + len(part) + 1 > MAX_CUE_CHARS:
+                    segments.append(current)
+                    current = part
+                else:
+                    current = f"{current} {part}" if current else part
+            if current:
+                segments.append(current)
+    return [s for s in segments if s.strip()]
+
+
 def build_transcript_vtt(
     chunks: list[str], wav_files: list[str], output_path: str,
     intro_offset: float = 0.0,
@@ -59,21 +88,36 @@ def build_transcript_vtt(
     intro_offset shifts all timestamps forward to account for episode intro.
     Returns output_path.
     """
-    cues = []
-    offset = intro_offset
-    for chunk_text, wav_path in zip(chunks, wav_files):
-        with wave.open(wav_path, "rb") as wf:
-            duration = wf.getnframes() / wf.getframerate()
-        start = offset
-        end = offset + duration
-        cues.append((start, end, chunk_text))
-        offset = end
-
     def _fmt(seconds: float) -> str:
         h = int(seconds) // 3600
         m = (int(seconds) % 3600) // 60
         s = seconds % 60
         return f"{h:02d}:{m:02d}:{s:06.3f}"
+
+    cues = []
+    offset = intro_offset
+    for chunk_text, wav_path in zip(chunks, wav_files):
+        with wave.open(wav_path, "rb") as wf:
+            duration = wf.getnframes() / wf.getframerate()
+        chunk_end = offset + duration
+        segments = _split_into_segments(chunk_text)
+        total_chars = sum(len(s) for s in segments)
+        if total_chars == 0:
+            offset = chunk_end
+            continue
+        cursor = offset
+        for i, seg in enumerate(segments):
+            seg_duration = duration * len(seg) / total_chars
+            seg_duration = max(seg_duration, MIN_CUE_DURATION)
+            seg_end = cursor + seg_duration
+            # Cap last segment to chunk boundary
+            if i == len(segments) - 1 or seg_end > chunk_end:
+                seg_end = chunk_end
+            cues.append((cursor, seg_end, seg))
+            cursor = seg_end
+            if cursor >= chunk_end:
+                break
+        offset = chunk_end
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("WEBVTT\n")
