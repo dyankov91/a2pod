@@ -85,6 +85,17 @@ def get_available_providers() -> dict[str, str]:
     return {p: _DEFAULT_MODELS[p] for p in _DEFAULT_MODELS if _api_keys.get(p, "") or p == "ollama"}
 
 
+def get_ollama_models() -> list[str]:
+    """Query the local Ollama server for installed model names."""
+    try:
+        req = urllib.request.Request("http://localhost:11434/api/tags")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return [m["name"] for m in data.get("models", [])]
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, OSError):
+        return []
+
+
 def set_provider(provider: str, model: str | None = None) -> tuple[str, str]:
     """Switch the active LLM provider and optionally the model at runtime.
 

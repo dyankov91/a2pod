@@ -19,7 +19,7 @@ from telegram.ext import (
 )
 
 from errors import PipelineError
-from llm import get_provider_info, get_available_providers, set_provider
+from llm import get_provider_info, get_available_providers, set_provider, get_ollama_models
 from pipeline import run_pipeline
 from publisher import get_feed_url, find_episode, list_episodes, delete_episode, delete_all_episodes
 from tts import (
@@ -196,6 +196,14 @@ async def _model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         for p in sorted(available):
             label = f"{'* ' if p == provider else ''}{p} ({available[p]})"
             buttons.append([InlineKeyboardButton(label, callback_data=f"model_{p}")])
+
+        # If already on ollama, also show installed models for quick switching
+        if provider == "ollama":
+            ollama_models = get_ollama_models()
+            if len(ollama_models) > 1:
+                for m in ollama_models:
+                    label = f"{'✓ ' if m == model else ''}{m}"
+                    buttons.append([InlineKeyboardButton(label, callback_data=f"ollama_model_{m}")])
 
         await update.message.reply_text(
             f"Current LLM: *{provider}* / `{model}`",
@@ -807,8 +815,36 @@ async def _button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         context.user_data.pop("pending_text", None)
         await query.edit_message_text("Cancelled.")
 
+    elif data.startswith("ollama_model_"):
+        new_model = data.removeprefix("ollama_model_")
+        try:
+            provider, model = set_provider("ollama", new_model)
+            await query.edit_message_text(
+                f"Switched to *{provider}* / `{model}`", parse_mode="Markdown"
+            )
+            logger.info("LLM switched to %s / %s by @%s", provider, model,
+                         query.from_user.username or query.from_user.id)
+        except ValueError as e:
+            await query.edit_message_text(f"Error: {e}")
+
     elif data.startswith("model_"):
         new_provider = data.removeprefix("model_")
+
+        # If switching to ollama and multiple models are installed, show model picker
+        if new_provider == "ollama":
+            ollama_models = get_ollama_models()
+            if len(ollama_models) > 1:
+                _, current_model = get_provider_info()
+                buttons = []
+                for m in ollama_models:
+                    label = f"{'✓ ' if m == current_model else ''}{m}"
+                    buttons.append([InlineKeyboardButton(label, callback_data=f"ollama_model_{m}")])
+                await query.edit_message_text(
+                    "Pick an Ollama model:",
+                    reply_markup=InlineKeyboardMarkup(buttons),
+                )
+                return
+
         try:
             provider, model = set_provider(new_provider)
             await query.edit_message_text(
