@@ -1,22 +1,35 @@
-# A2Pod 🎧
+# A2Pod
 
-Convert any article URL into an audiobook on Apple Silicon. Generates audio locally, uploads to S3, and publishes a podcast feed you can subscribe to in Apple Podcasts on your iPhone.
+Convert articles into audio you can listen to anywhere. Generates natural-sounding speech locally on Apple Silicon, uploads to S3, and publishes a podcast feed you can subscribe to in Apple Podcasts.
+
+```
+URL / file / text  →  Extract  →  Clean  →  Summarize  →  Chunk  →  TTS  →  Intro  →  M4A  →  S3  →  Podcast Feed
+                                (regex+LLM)  (LexRank+LLM)       (Kokoro)  (jingle)       (+ VTT transcript)
+```
+
+> **Disclaimer** — This tool is designed for personal use with content you already have access to. Respect copyright: do not redistribute generated audio unless you own the source content or have permission to do so.
 
 ## Features
 
-- **Any URL** — articles, blog posts, newsletters, X/Twitter posts and articles
-- **Text cleaning** — automatically strips URLs, markdown, code blocks, CTAs, and web artifacts before TTS
-- **Episode summaries** — generates 2-3 sentence descriptions via Ollama, OpenAI, or Anthropic (optional, graceful fallback)
-- **Apple Silicon TTS** — Kokoro model via MLX, fast and natural-sounding
-- **Podcast feed** — uploads to S3 and updates an RSS feed, subscribe once in Apple Podcasts
-- **Telegram bot** — send a URL to your bot, get audio back in chat with live progress updates
-- **Offline fallback** — works without AWS, just saves M4B files locally
+- **Any URL** — articles, blog posts, newsletters, X/Twitter posts and long-form articles
+- **Local text** — convert `.txt` files or paste text directly (Telegram bot)
+- **Episode intros** — programmatic chime jingle + spoken title before content
+- **Two-pass text cleaning** — regex pass strips URLs, markdown, code, CTAs; LLM pass catches subtle patterns (parallel for cloud providers)
+- **TTS pronunciation normalization** — abbreviations, numbers, currencies, symbols, and acronyms converted to spoken words
+- **Extractive summarization** — LexRank selects key sentences from the full article before LLM generates a 2-3 sentence episode description
+- **WebVTT transcripts** — per-chunk timestamped transcript generated alongside every audio file
+- **Apple Silicon TTS** — Kokoro-82M via MLX Audio, 7 voices, parallel workers
+- **Podcast feed** — RSS 2.0 with iTunes and Podcast Index extensions; subscribe once in Apple Podcasts
+- **Telegram bot** — send URLs, paste text, or upload `.txt` files; live progress updates, inline voice/model switching
+- **Deduplication** — skips URLs already in the podcast feed (override with `--force`)
+- **Episode management** — delete single episodes or bulk-clear the entire feed
+- **Offline mode** — works without AWS, saves M4A files locally
 
 ## Requirements
 
 - macOS with Apple Silicon (M1/M2/M3/M4)
 - Python 3.10+
-- ~500MB disk for model + dependencies
+- ~500 MB disk for model + dependencies
 - X API bearer token (optional, for X/Twitter posts)
 - AWS account (optional, for podcast sync)
 - LLM provider (optional, for summaries and text cleaning): [Ollama](https://ollama.com) (local), [OpenAI API](https://platform.openai.com), or [Anthropic API](https://console.anthropic.com)
@@ -29,7 +42,7 @@ cd a2pod
 ./install.sh
 ```
 
-The installer handles: dependencies, model download, PATH setup, and optional AWS / Telegram bot configuration.
+The installer handles dependencies, model download, PATH setup, and optional AWS / Telegram bot configuration.
 
 Then:
 
@@ -43,7 +56,7 @@ a2pod https://example.com/some-article
 # Basic — converts and uploads to podcast feed
 a2pod https://example.com/article
 
-# Custom voice (male)
+# Custom voice
 a2pod https://example.com/article --voice am_michael
 
 # Faster speech
@@ -56,14 +69,42 @@ a2pod --file article.txt --title "My Article"
 a2pod https://example.com/article --no-upload
 
 # Custom output path
-a2pod https://example.com/article --output ~/Desktop/article.m4b
+a2pod https://example.com/article --output ~/Desktop/article.m4a
 
 # Skip summary generation
 a2pod https://example.com/article --no-summary
 
-# Use a different model for summaries
+# Skip episode intro (jingle + spoken title)
+a2pod https://example.com/article --no-intro
+
+# Reprocess a URL already in the feed
+a2pod https://example.com/article --force
+
+# Use more parallel TTS workers
+a2pod https://example.com/article --workers 4
+
+# Override LLM model
 a2pod https://example.com/article --model mistral
 ```
+
+### CLI Reference
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `<url>` | | Article URL to convert |
+| `--file` | `-f` | Local text file instead of URL |
+| `--title` | `-t` | Override article title |
+| `--voice` | `-v` | TTS voice (default: `af_heart`) |
+| `--speed` | `-s` | Speech speed (default: `1.0`) |
+| `--output` | `-o` | Custom output path |
+| `--model` | `-m` | LLM model override |
+| `--workers` | `-w` | Parallel TTS workers (default: `2`) |
+| `--no-upload` | | Skip S3 upload and podcast feed update |
+| `--no-summary` | | Skip episode summary generation |
+| `--no-intro` | | Skip episode intro (jingle + spoken title) |
+| `--force` | | Reprocess even if already in the podcast feed |
+| `--delete` | | Delete episode matching title or URL |
+| `--delete-all` | | Delete all episodes from the feed and S3 |
 
 ### X/Twitter
 
@@ -101,6 +142,29 @@ allowed_users = 123456789,987654321
 ```
 
 Multiple user IDs can be comma-separated. Only listed users can interact with the bot.
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `/start` | Introduction and feature overview |
+| `/help` | Detailed usage instructions |
+| `/voice` | Show or switch TTS voice (inline keyboard) |
+| `/model` | Show or switch LLM provider and model (inline keyboard) |
+| `/feed` | Get the podcast feed URL |
+| `/status` | Bot status, uptime, version, active jobs |
+| `/delete` | Remove a single episode (with confirmation) |
+| `/deleteall` | Remove all episodes from feed and S3 |
+| `/restart` | Restart the bot process |
+
+### File and Text Input
+
+Beyond URLs, the bot accepts:
+
+- **Pasted text** — paste 50+ words directly into the chat to generate audio
+- **`.txt` file uploads** — upload a text file (up to 5 MB) to convert to audio
+
+Jobs are serialized per user — each user can run one conversion at a time.
 
 ### Running as a Background Service
 
@@ -167,9 +231,40 @@ tail -f ~/.config/a2pod/bot.log
 a2pod-bot
 ```
 
-## LLM Provider
+## Configuration
 
-An LLM is used for episode summaries and text cleaning. Choose a provider during `./install.sh` or configure manually in `~/.config/a2pod/config`:
+All configuration lives in `~/.config/a2pod/config` (INI format). The installer creates this file for you.
+
+```ini
+[llm]
+provider = ollama                      # ollama, openai, or anthropic
+model = llama3.2                       # Model name for the active provider
+openai_api_key = sk-...                # OpenAI API key (if using OpenAI)
+anthropic_api_key = sk-ant-...         # Anthropic API key (if using Anthropic)
+
+[tts]
+voice = af_heart                       # Default TTS voice
+workers = 2                            # Parallel TTS workers
+
+[telegram]
+bot_token = 7123456789:AAH...          # Telegram bot token
+allowed_users = 123456789,987654321    # Comma-separated allowed user IDs
+
+[x]
+bearer_token = YOUR_TOKEN_HERE         # X/Twitter API v2 bearer token
+
+[podcast]
+name = A2Pod                   # Podcast title in feed and episode intros
+
+[aws]
+profile = default                        # AWS CLI profile name
+bucket = my-podcast-feed            # S3 bucket name
+region = eu-central-1                  # AWS region
+```
+
+### LLM Providers
+
+An LLM is used for episode summaries and the second pass of text cleaning. If no provider is configured, Ollama is used by default. If the LLM is unavailable, summaries fall back to first-sentence extraction and text cleaning uses regex only.
 
 **Ollama (local, free):**
 
@@ -192,10 +287,6 @@ openai_api_key = sk-...
 model = gpt-4o-mini
 ```
 
-```bash
-pip3 install openai
-```
-
 **Anthropic:**
 
 ```ini
@@ -205,21 +296,19 @@ anthropic_api_key = sk-ant-...
 model = claude-haiku-4-20250414
 ```
 
-```bash
-pip3 install anthropic
-```
+You can store API keys for multiple providers and switch between them at runtime via the Telegram bot's `/model` command or by editing the config. Use `--no-summary` to skip summaries entirely, or `--model <name>` to override the model for a single run.
 
-**Multiple providers:** You can store API keys for multiple providers and switch between them at runtime (via the Telegram bot's `/model` command or by editing the config):
+### Voices
 
-```ini
-[llm]
-provider = openai
-model = gpt-4o-mini
-openai_api_key = sk-...
-anthropic_api_key = sk-ant-...
-```
-
-If no provider is configured, Ollama is used by default. If the LLM is unavailable, summaries fall back to first-sentence extraction and text cleaning uses regex only. Use `--no-summary` to skip summaries entirely, or `--model <name>` to override the model.
+| Voice | Gender | ID |
+|-------|--------|----|
+| Heart (default) | Female | `af_heart` |
+| Bella | Female | `af_bella` |
+| Nicole | Female | `af_nicole` |
+| Sarah | Female | `af_sarah` |
+| Sky | Female | `af_sky` |
+| Adam | Male | `am_adam` |
+| Michael | Male | `am_michael` |
 
 ## Podcast Setup
 
@@ -244,35 +333,21 @@ aws configure --profile default
 # Region: eu-central-1
 ```
 
-The S3 bucket (`my-podcast-feed`) needs public read access for Apple Podcasts to fetch the feed and audio files.
-
-## Available Voices
-
-| Voice | Gender | ID |
-|-------|--------|----|
-| Heart (default) | Female | `af_heart` |
-| Bella | Female | `af_bella` |
-| Nicole | Female | `af_nicole` |
-| Sarah | Female | `af_sarah` |
-| Sky | Female | `af_sky` |
-| Adam | Male | `am_adam` |
-| Michael | Male | `am_michael` |
+The S3 bucket needs public read access for Apple Podcasts to fetch the feed and audio files.
 
 ## How It Works
 
-```
-URL → Scrape → Clean → Summarize → Chunk → TTS → M4A → S3 → Podcast Feed
-```
+1. **Extract** — trafilatura scrapes article text from URLs; X API v2 handles X/Twitter posts; also accepts local files and pasted text
+2. **Clean (regex)** — strips URLs, markdown, HTML, code blocks, CTAs, and web artifacts; normalizes abbreviations, numbers, currencies, and symbols to spoken words
+3. **Summarize** — LexRank (extractive) selects key sentences across the full article, then LLM generates a 2-3 sentence episode description from those sentences
+4. **Clean (LLM)** — second pass catches subtle promotional language, visual references, and awkward transitions the regex missed (runs in parallel with summarization for cloud providers)
+5. **Chunk** — splits text into ~2000-character segments at sentence boundaries
+6. **TTS** — Kokoro-82M generates WAV audio for each chunk in parallel (configurable worker count)
+7. **Intro** — synthesizes a C-major chime jingle + spoken "[Podcast Name] presents: [Title]" + brief silence
+8. **Assemble** — ffmpeg concatenates all WAVs into a single M4A with metadata; builds a WebVTT transcript with timestamps
+9. **Publish** — uploads M4A and VTT to S3, updates the podcast RSS feed
 
-1. **Scrape** — trafilatura extracts article text; X API v2 handles X/Twitter posts
-2. **Clean** — regex strips URLs, markdown, code blocks, CTAs, and web artifacts
-3. **Summarize** — LLM generates a 2-3 sentence episode description (optional)
-4. **Chunk** — splits into ~2000 char segments at sentence boundaries
-5. **TTS** — Kokoro-82M generates audio locally on Apple Silicon
-6. **Assemble** — ffmpeg concatenates chunks into M4A with metadata
-7. **Publish** — uploads to S3 and updates the podcast RSS feed
-
-## File Structure
+## Project Structure
 
 ```
 a2pod/
@@ -283,23 +358,30 @@ a2pod/
 ├── lib/
 │   ├── errors.py           # Shared PipelineError exception
 │   ├── pipeline.py         # Orchestration (used by CLI and bot)
-│   ├── extractor.py        # URL/file text extraction
-│   ├── cleaner.py          # Regex + LLM text cleaning for audio
-│   ├── llm.py              # LLM abstraction (Ollama/OpenAI/Anthropic)
-│   ├── summarizer.py       # LLM episode summaries
-│   ├── chunker.py          # Text splitting
-│   ├── tts.py              # MLX Audio TTS wrapper
-│   ├── assembler.py        # Audio concat + M4A packaging
-│   ├── publisher.py        # S3 upload + podcast RSS feed
+│   ├── extractor.py        # URL/file/text extraction (trafilatura + X API)
+│   ├── cleaner.py          # Regex + LLM two-pass text cleaning
+│   ├── llm.py              # LLM abstraction (Ollama / OpenAI / Anthropic)
+│   ├── summarizer.py       # LexRank extraction + LLM episode summaries
+│   ├── chunker.py          # Sentence-boundary text splitting
+│   ├── tts.py              # Kokoro-82M TTS via MLX Audio
+│   ├── intro.py            # Episode intro (jingle + spoken title)
+│   ├── assembler.py        # Audio concat + M4A encoding + VTT transcripts
+│   ├── artwork.py          # Podcast cover image generation
+│   ├── publisher.py        # S3 upload + podcast RSS feed management
 │   └── telegram_bot.py     # Telegram bot handlers + polling
 └── README.md
 ```
 
 ## Output
 
-- Audiobooks saved to `~/A2Pod/`
+- Audio saved to `~/A2Pod/` as `.m4a` files
+- WebVTT transcripts saved alongside as `.vtt` files
 - Uploaded to `s3://my-podcast-feed/audiobooks/`
 - Feed at `https://my-podcast-feed.s3.eu-central-1.amazonaws.com/feed.xml`
+
+## Contributing
+
+Contributions are welcome. Please open an issue to discuss larger changes before submitting a PR.
 
 ## License
 
