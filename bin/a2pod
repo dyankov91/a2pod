@@ -27,6 +27,38 @@ def _print_progress(msg: str) -> None:
     print(f"  {msg}")
 
 
+def _select_model() -> str:
+    """Query Ollama for installed models and let the user pick one."""
+    import json
+    import urllib.request
+    try:
+        req = urllib.request.Request("http://localhost:11434/api/tags")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        models = [m["name"] for m in data.get("models", [])]
+    except Exception:
+        print("  Could not reach Ollama. Is it running?")
+        sys.exit(1)
+
+    if not models:
+        print("  No Ollama models installed. Pull one first: ollama pull llama3.2")
+        sys.exit(1)
+
+    print("  Available models:")
+    for i, name in enumerate(models, 1):
+        print(f"    {i}) {name}")
+    print()
+    choice = input(f"  Choose (1-{len(models)}): ").strip()
+    try:
+        idx = int(choice) - 1
+        if not 0 <= idx < len(models):
+            raise ValueError
+    except ValueError:
+        print("  Invalid choice.")
+        sys.exit(1)
+    return models[idx]
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Convert articles to audiobooks and publish to podcast feed",
@@ -46,8 +78,8 @@ def main():
     parser.add_argument("--speed", "-s", type=float, default=DEFAULT_SPEED,
                         help=f"Speech speed (default: {DEFAULT_SPEED})")
     parser.add_argument("--output", "-o", help="Custom output path")
-    parser.add_argument("--model", "-m", default=DEFAULT_MODEL,
-                        help=f"LLM model (default: {DEFAULT_MODEL}, based on configured provider)")
+    parser.add_argument("--model", "-m", nargs="?", default=DEFAULT_MODEL, const="__select__",
+                        help=f"LLM model (default: {DEFAULT_MODEL}). Use --model without a value to pick interactively.")
     parser.add_argument("--no-summary", action="store_true",
                         help="Skip episode summary generation")
     parser.add_argument("--workers", "-w", type=int, default=DEFAULT_WORKERS,
@@ -95,6 +127,9 @@ def main():
     if not args.url and not args.file:
         parser.print_help()
         sys.exit(1)
+
+    if args.model == "__select__":
+        args.model = _select_model()
 
     try:
         result = run_pipeline(
