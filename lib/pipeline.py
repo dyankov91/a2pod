@@ -126,6 +126,7 @@ def run_pipeline(
             progress("Generating summary...")
             summary = get_summary(text, resolved_title, model)
     progress("Text cleaned.")
+    progress("Summary done.")
 
     word_count = len(text.split())
     est_minutes = word_count / 150
@@ -140,6 +141,8 @@ def run_pipeline(
             workers=workers,
         )
 
+        progress("Audio done.")
+
         # Generate episode intro (jingle + spoken title + silence)
         intro_offset = 0.0
         if not no_intro:
@@ -153,6 +156,9 @@ def run_pipeline(
         else:
             wav_files = content_wavs
 
+        if not no_intro:
+            progress("Intro done.")
+
         OUTPUT_DIR.mkdir(exist_ok=True)
         filename = sanitize_filename(resolved_title)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -164,6 +170,8 @@ def run_pipeline(
         # Build VTT transcript from chunks + content WAV durations
         vtt_path = output_path.replace(".m4a", ".vtt")
         build_transcript_vtt(chunks, content_wavs, vtt_path, intro_offset=intro_offset)
+
+    progress("Encoding done.")
 
     size_mb = os.path.getsize(output_path) / (1024 * 1024)
     progress(f"Saved: {output_path} ({size_mb:.1f} MB)")
@@ -183,6 +191,7 @@ def run_pipeline(
         feed_url = get_feed_url()
         result["feed_url"] = feed_url
         result["audio_url"] = audio_url
+        progress("Publishing done.")
         progress(f"Published. Feed: {feed_url}")
 
     progress("Done.")

@@ -51,11 +51,22 @@ _STATUS_MAP = {
     "Processing text...": "Processing text...",
     "Extracting text from file...": "Extracting text...",
     "Cleaning text...": "Cleaning text...",
-    "Text cleaned.": "Cleaning text [done]",
     "Generating summary...": "Generating summary...",
     "Generating episode intro...": "Generating intro...",
     "Encoding M4A...": "Encoding audio...",
     "Publishing to podcast feed...": "Publishing...",
+}
+
+# Map pipeline completion messages to (label_to_replace, done_text).
+# label_to_replace is matched against the start of existing status lines.
+_DONE_MAP = {
+    "Text extracted.": (["Fetching article", "Processing text", "Extracting text"], "[done]"),
+    "Text cleaned.": (["Cleaning text"], "[done]"),
+    "Summary done.": (["Generating summary"], "[done]"),
+    "Audio done.": (["Generating audio"], "[done]"),
+    "Intro done.": (["Generating intro"], "[done]"),
+    "Encoding done.": (["Encoding audio"], "[done]"),
+    "Publishing done.": (["Publishing"], "[done]"),
 }
 
 
@@ -338,6 +349,17 @@ def _run_pipeline_sync(loop: asyncio.AbstractEventLoop, chat_id: int,
                     break
             else:
                 status_lines.append(progress_line)
+        elif msg in _DONE_MAP:
+            prefixes, suffix = _DONE_MAP[msg]
+            found = False
+            for idx, line in enumerate(status_lines):
+                for prefix in prefixes:
+                    if line.startswith(prefix):
+                        status_lines[idx] = f"{prefix} {suffix}"
+                        found = True
+                        break
+                if found:
+                    break
         elif msg in _STATUS_MAP:
             status_lines.append(_STATUS_MAP[msg])
         else:
