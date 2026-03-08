@@ -28,11 +28,56 @@ URL / file / text  →  Extract  →  Clean  →  Summarize  →  Chunk  →  TT
 ## Requirements
 
 - macOS with Apple Silicon (M1/M2/M3/M4)
-- Python 3.10+
+- Python 3.10–3.13 (see [Python version](#python-version) below)
 - ~500 MB disk for model + dependencies
 - X API bearer token (optional, for X/Twitter posts)
 - AWS account (optional, for S3 provider)
 - LLM provider (optional, for summaries and text cleaning): [Ollama](https://ollama.com) (local), [OpenAI API](https://platform.openai.com), [Anthropic API](https://console.anthropic.com), or [Google Gemini API](https://ai.google.dev)
+
+### Python Version
+
+The default macOS system Python (3.9) is **too old** — the `X | Y` type syntax and several dependencies require 3.10+. Python 3.14 is **too new** — `spacy` and `blis` do not yet support it.
+
+Install a compatible version via Homebrew:
+
+```bash
+brew install python@3.13
+```
+
+The installer uses `pip3 install` which targets whichever `python3` is first on your PATH. If that resolves to the system Python 3.9, packages will install but fail at runtime. Two ways to handle this:
+
+**Option A — Virtual environment (recommended):**
+
+```bash
+python3.13 -m venv .venv
+source .venv/bin/activate
+./install.sh
+```
+
+Add the venv to your shell profile so `a2pod` always uses it:
+
+```bash
+echo 'export PATH="/path/to/a2pod/.venv/bin:$PATH"' >> ~/.zshrc
+```
+
+**Option B — Homebrew Python on PATH:**
+
+Ensure `/opt/homebrew/bin` comes before `/usr/bin` in your PATH so that `python3` resolves to the Homebrew version.
+
+### phonemizer Conflict
+
+The TTS pipeline depends on `phonemizer-fork` (which provides `EspeakWrapper.set_data_path`). If both `phonemizer` and `phonemizer-fork` are installed, the original `phonemizer` takes precedence and TTS model loading fails with:
+
+```
+AttributeError: type object 'EspeakWrapper' has no attribute 'set_data_path'
+```
+
+Fix by removing the original and reinstalling the fork:
+
+```bash
+pip uninstall phonemizer -y
+pip install phonemizer-fork --force-reinstall
+```
 
 ## Quick Start
 
@@ -43,6 +88,8 @@ cd a2pod
 ```
 
 The installer handles dependencies, model download, PATH setup, podcast artwork, **provider choice** (Local or S3), and optional Telegram bot configuration.
+
+If you already have a `~/.config/a2pod/config` from another machine, copy it before running the installer — it will detect existing values and skip the interactive prompts.
 
 Then:
 
@@ -159,6 +206,39 @@ The public S3 feed URL is:
 https://<your-bucket>.s3.<your-region>.amazonaws.com/feed.xml
 ```
 
+#### Minimal IAM Policy
+
+If you prefer not to use broad AWS credentials, create a dedicated IAM user with only the permissions a2pod needs:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject"],
+      "Resource": [
+        "arn:aws:s3:::YOUR-BUCKET/feed.xml",
+        "arn:aws:s3:::YOUR-BUCKET/artwork.jpg"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::YOUR-BUCKET/audiobooks/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::YOUR-BUCKET",
+      "Condition": {
+        "StringLike": { "s3:prefix": "audiobooks/*" }
+      }
+    }
+  ]
+}
+```
+
 ### Local Server
 
 When using the local provider, the installer sets up a launchd service (`com.a2pod.server`) that runs automatically whenever your Mac is on.
@@ -228,6 +308,8 @@ Jobs are serialized per user — each user can run one conversion at a time.
 ### Running as a Background Service
 
 The installer offers to set up a launchd service that starts the bot automatically whenever your Mac is on and restarts it if it crashes.
+
+> **Virtual environment note:** If you use a venv, the launchd plist must reference the venv's Python binary (e.g. `/path/to/a2pod/.venv/bin/python3`) in `ProgramArguments`, and include the venv's `bin` directory in the `PATH` environment variable. The installer handles this automatically, but if you create the plist manually or move the venv, update the paths accordingly.
 
 ```bash
 # Check status
