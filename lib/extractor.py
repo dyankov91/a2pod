@@ -109,17 +109,16 @@ def _extract_text_from_tweet(tweet: dict) -> tuple[str, bool, str | None]:
     article = tweet.get("article")
     if article and isinstance(article, dict):
         article_title = article.get("title")
-        for key in ("text", "body", "content", "html_content"):
+        for key in ("text", "body", "content", "html_content", "plain_text"):
             val = article.get(key)
             if val and isinstance(val, str) and len(val) > 100:
                 return val, True, article_title
-        # Last resort: find the longest string value in the article object
-        longest = ""
-        for val in article.values():
-            if isinstance(val, str) and len(val) > len(longest):
-                longest = val
-        if len(longest) > 100:
-            return longest, True, article_title
+        # Article exists but API didn't return the body
+        raise PipelineError(
+            "X API returned an article without body text.\n"
+            "The article content may require a higher-tier X API plan, "
+            "or this article format is not supported."
+        )
 
     # Try note_tweet (long posts >280 chars)
     note = tweet.get("note_tweet")
